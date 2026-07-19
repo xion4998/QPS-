@@ -1,5 +1,21 @@
 /* eslint-disable */
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { initializeApp } from "firebase/app";
+import { getDatabase, ref, set, onValue } from "firebase/database";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBr-Vq8kDPrxNv8RojdrPa_GUgXth2tHmg",
+  authDomain: "teamnight-d909b.firebaseapp.com",
+  databaseURL: "https://teamnight-d909b-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "teamnight-d909b",
+  storageBucket: "teamnight-d909b.firebasestorage.app",
+  messagingSenderId: "440378727824",
+  appId: "1:440378727824:web:2c4bf51c6c57f8f7d96715"
+};
+
+let fdb = null;
+try { fdb = getDatabase(initializeApp(firebaseConfig)); } catch (e) {}
+const dbSet = (p, val) => { try { if (fdb) set(ref(fdb, p), val); } catch (e) {} };
 
 const ZONES = ["상부", "하부", "B", "C", "D", "P", "T", "W", "Z"];
 const ZONE_COLORS = {
@@ -74,7 +90,25 @@ export default function App() {
   const saveData = (newData) => {
     setData(newData);
     try { localStorage.setItem("qps_data", JSON.stringify(newData)); } catch (e) {}
+    dbSet("qps/data", newData);
   };
+
+  // Firebase 실시간 구독
+  useEffect(() => {
+    if (!fdb) return;
+    const unsub1 = onValue(ref(fdb, "qps/data"), snap => {
+      const v = snap.val();
+      if (v) {
+        setData(v);
+        try { localStorage.setItem("qps_data", JSON.stringify(v)); } catch (e) {}
+      }
+    });
+    const unsub2 = onValue(ref(fdb, "qps/round"), snap => {
+      const v = snap.val();
+      if (v) setRound(v);
+    });
+    return () => { unsub1(); unsub2(); };
+  }, []);
 
   // 번호 토글 — 해당 번호까지 누적 체크
   const toggleNum = (zone, line, type, idx) => {
@@ -116,6 +150,7 @@ export default function App() {
     setResetConfirm(false);
     setRound(1);
     try { localStorage.setItem("qps_round", "1"); } catch (e) {}
+    dbSet("qps/round", 1);
   };
 
   const nextRound = () => {
@@ -136,6 +171,7 @@ export default function App() {
     const nr = round + 1;
     setRound(nr);
     try { localStorage.setItem("qps_round", String(nr)); } catch (e) {}
+    dbSet("qps/round", nr);
     setNextRoundConfirm(false);
   };
 
@@ -170,6 +206,11 @@ export default function App() {
       pct: Math.round(((flowDone + shelfDone) / (total * 2)) * 100),
     };
   }, [stats]);
+
+  // 대시보드용 요약 실시간 전송
+  useEffect(() => {
+    dbSet("summary/qps", { pct: grand.pct, round: round, ts: Date.now() });
+  }, [grand.pct, round]);
 
   const S = {
     bg: "#f0f4f8", card: "#ffffff", border: "#e2e8f0",
