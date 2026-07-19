@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { useState, useMemo } from "react";
 
 const ZONES = ["상부", "하부", "B", "C", "D", "P", "T", "W", "Z"];
@@ -9,10 +10,12 @@ const LINES = [1, 2, 3, 4];
 const NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 const TYPES = ["플로우", "선반"];
 
-const fontLink = document.createElement("link");
-fontLink.rel = "stylesheet";
-fontLink.href = "https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css";
-document.head.appendChild(fontLink);
+try {
+  const fontLink = document.createElement("link");
+  fontLink.rel = "stylesheet";
+  fontLink.href = "https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css";
+  document.head.appendChild(fontLink);
+} catch (e) {}
 
 const initData = () => {
   try {
@@ -51,6 +54,22 @@ export default function App() {
   const [activeZone, setActiveZone] = useState(ZONES[0]);
   const [activeLine, setActiveLine] = useState(1);
   const [copied, setCopied] = useState(false);
+  const [round, setRound] = useState(() => {
+    try { const s = localStorage.getItem("qps_round"); if (s) return parseInt(s) || 1; } catch (e) {}
+    return 1;
+  });
+  const [nextRoundConfirm, setNextRoundConfirm] = useState(false);
+  const [quickType, setQuickType] = useState("플로우");
+  const [quickLine, setQuickLine] = useState(2);
+  const [eventMode, setEventMode] = useState(() => {
+    try { const s = localStorage.getItem("qps_event_mode"); if (s !== null) return s === "true"; } catch (e) {}
+    return true; // true = 행사, false = 비행사
+  });
+
+  const toggleEventMode = (v) => {
+    setEventMode(v);
+    try { localStorage.setItem("qps_event_mode", String(v)); } catch (e) {}
+  };
 
   const saveData = (newData) => {
     setData(newData);
@@ -77,8 +96,14 @@ export default function App() {
     saveData(newData);
   };
 
+  const [resetConfirm, setResetConfirm] = useState(false);
+
   const resetAll = () => {
-    if (!window.confirm("전체 초기화할까요?")) return;
+    if (!resetConfirm) {
+      setResetConfirm(true);
+      setTimeout(() => setResetConfirm(false), 3000);
+      return;
+    }
     const d = {};
     ZONES.forEach(z => {
       d[z] = {};
@@ -88,6 +113,30 @@ export default function App() {
       });
     });
     saveData(d);
+    setResetConfirm(false);
+    setRound(1);
+    try { localStorage.setItem("qps_round", "1"); } catch (e) {}
+  };
+
+  const nextRound = () => {
+    if (!nextRoundConfirm) {
+      setNextRoundConfirm(true);
+      setTimeout(() => setNextRoundConfirm(false), 3000);
+      return;
+    }
+    const d = {};
+    ZONES.forEach(z => {
+      d[z] = {};
+      LINES.forEach(l => {
+        d[z][l] = {};
+        TYPES.forEach(t => { d[z][l][t] = Array(9).fill(false); });
+      });
+    });
+    saveData(d);
+    const nr = round + 1;
+    setRound(nr);
+    try { localStorage.setItem("qps_round", String(nr)); } catch (e) {}
+    setNextRoundConfirm(false);
   };
 
   // 통계 계산
@@ -137,15 +186,122 @@ export default function App() {
     const timeStr = `${now.getHours()}시${now.getMinutes().toString().padStart(2,"0")}분`;
     const month = now.getMonth() + 1;
     const day = now.getDate();
-    const lines = [
-      `QPS (${timeStr})`,
-      `${month}월${day}일자`,
-      `──────────────`,
-      `플로우  ${grand.flowPct}%`,
-      `선반    ${grand.shelfPct}%`,
-      `──────────────`,
-      `토탈 ${grand.pct}%`,
+    const lines = [`QPS ${round}차 (${timeStr})`, `${month}월${day}일자`, `──────────────`];
+
+    const lineOrder = [2, 4, 3, 1];
+
+    // 요약 그룹: 행사 = 존별 / 비행사 = 묶음 피킹
+    const GROUPS = eventMode ? [
+      { name: "상부", zones: ["상부"] },
+      { name: "하부", zones: ["하부"] },
+      { name: "B존", zones: ["B"] },
+      { name: "D존", zones: ["D"] },
+      { name: "P존", zones: ["P"] },
+      { name: "W존", zones: ["W"] },
+      { name: "Z존", zones: ["Z"] },
+      { name: "C/T", zones: ["C", "T"] },
+    ] : [
+      { name: "상부", zones: ["상부"] },
+      { name: "지하", zones: ["P", "Z"] },
+      { name: "하부", zones: ["하부", "B", "C", "T", "W"] },
+      { name: "D존", zones: ["D"] },
     ];
+
+    // 그룹 상태 계산 (멤버 존 합산)
+    const getGroupStatus = (zones) => {
+      const flowTotal = zones.length * LINES.length * 9;
+      const shelfTotal = zones.length * LINES.length * 9;
+      let flowDone = 0, shelfDone = 0;
+      zones.forEach(z => LINES.forEach(l => {
+        flowDone += data[z][l]["플로우"].filter(v=>v).length;
+        shelfDone += data[z][l]["선반"].filter(v=>v).length;
+      }));
+      const flowPick = zones.every(z => (data[z]._pick || {})["플로우"]);
+      const shelfPick = zones.every(z => (data[z]._pick || {})["선반"]);
+      const flowAll = flowDone === flowTotal;
+      const shelfAll = shelfDone === shelfTotal;
+
+      // 마지막 번호: 가장 진행이 느린 존 기준 (불출 순서 2→4→3→1)
+      const lastNum = (type) => {
+        // 현재 불출 위치 = 가장 많이 진행된 존의 마지막 번호
+        let maxPos = -1, maxInfo = null;
+        zones.forEach(z => {
+          let pos = 0, info = null;
+          lineOrder.forEach(l => {
+            const cnt = data[z][l][type].filter(v=>v).length;
+            pos += cnt;
+            if (cnt > 0) info = { line: l, num: `${l}${cnt}`, zone: z.length<=1 ? z+"존" : z };
+          });
+          if (pos > maxPos && info) { maxPos = pos; maxInfo = info; }
+        });
+        return maxInfo;
+      };
+
+      if (flowPick && shelfPick) return "완료";
+      if (flowAll && shelfAll) return "불출완료";
+      if (flowDone === 0 && shelfDone === 0) return "미시작";
+      if (flowAll && !shelfAll) {
+        const sn = lastNum("선반");
+        return sn ? `플로우 피킹완료 / 선반 ${sn.line}라인 불출중 (${sn.zone} ${sn.num})` : "플로우 피킹완료";
+      }
+      if (!flowAll && shelfAll) {
+        const fn = lastNum("플로우");
+        return fn ? `플로우 ${fn.line}라인 불출중 (${fn.zone} ${fn.num}) / 선반 피킹완료` : "선반 피킹완료";
+      }
+      const fn = lastNum("플로우"), sn = lastNum("선반");
+      const fp = fn ? `플로우 ${fn.line}라인 불출중 (${fn.zone} ${fn.num})` : "";
+      const sp = sn ? `선반 ${sn.line}라인 불출중 (${sn.zone} ${sn.num})` : "";
+      return [fp, sp].filter(Boolean).join(" / ") || "미시작";
+    };
+
+    // 전존 완료 체크
+    const allFlow = ZONES.every(z => LINES.every(l => data[z][l]["플로우"].every(v=>v)));
+    const allShelf = ZONES.every(z => LINES.every(l => data[z][l]["선반"].every(v=>v)));
+
+    if (allFlow && allShelf) {
+      lines.push(`전체 불출완료`);
+    } else if (allFlow) {
+      lines.push(`플로우 피킹완료`);
+      // 선반 상태만 그룹별 표시
+      const groupStatus = {};
+      GROUPS.forEach(g => {
+        const st = getGroupStatus(g.zones);
+        groupStatus[g.name] = st.replace("플로우 피킹완료 / ", "").replace("플로우 피킹완료", "선반 미불출");
+      });
+      const statusGroups = {};
+      GROUPS.forEach(g => {
+        const st = groupStatus[g.name];
+        if (!statusGroups[st]) statusGroups[st] = [];
+        statusGroups[st].push(g.name);
+      });
+      Object.entries(statusGroups).forEach(([status, names]) => {
+        if (status === "선반 미불출") { lines.push(`나머지 미불출`); return; }
+        lines.push(`${names.join("/")} : ${status}`);
+      });
+    } else {
+      const groupStatus = {};
+      GROUPS.forEach(g => { groupStatus[g.name] = getGroupStatus(g.zones); });
+
+      const statusGroups = {};
+      GROUPS.forEach(g => {
+        const st = groupStatus[g.name];
+        if (!statusGroups[st]) statusGroups[st] = [];
+        statusGroups[st].push(g.name);
+      });
+
+      const order = ["완료", "불출완료", "플로우 피킹완료"];
+      const sorted = Object.entries(statusGroups).sort(([a], [b]) => {
+        const ai = order.indexOf(a) >= 0 ? order.indexOf(a) : a === "미시작" ? 999 : 50;
+        const bi = order.indexOf(b) >= 0 ? order.indexOf(b) : b === "미시작" ? 999 : 50;
+        return ai - bi;
+      });
+
+      sorted.forEach(([status, names]) => {
+        lines.push(`${names.join("/")} : ${status}`);
+      });
+    }
+
+    lines.push(`──────────────`, `토탈 ${grand.pct}%`);
     return lines.join("\n");
   };
 
@@ -156,48 +312,44 @@ export default function App() {
       <div style={{ textAlign: "center", marginBottom: 20 }}>
         <h1 style={{ fontSize: 28, fontWeight: 900, margin: 0, letterSpacing: "0.08em", background: "linear-gradient(135deg,#059669,#0891b2)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>QPS</h1>
         <div style={{ fontSize: 11, letterSpacing: "0.3em", color: S.textSub, textTransform: "uppercase", marginTop: 4, fontWeight: 500 }}>피킹 진행 현황</div>
+        <div style={{ display: "inline-block", marginTop: 8, fontSize: 13, fontWeight: 900, color: "#7c3aed", background: "#7c3aed15", border: "1.5px solid #7c3aed44", borderRadius: 20, padding: "4px 16px" }}>
+          {round}차 피킹
+        </div>
       </div>
 
-      {/* Grand Total - 플로우/선반 각각 */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
-        <div style={{ flex: 1, background: "linear-gradient(135deg,#059669,#047857)", borderRadius: 16, padding: "16px 12px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, boxShadow: "0 4px 16px rgba(5,150,105,0.25)" }}>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.8)", fontWeight: 600, letterSpacing: "0.08em" }}>플로우 피킹률</div>
-          <div style={{ position: "relative" }}>
-            <CircleProgress percent={grand.flowPct} color="#ffffff" size={80} />
-            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <span style={{ fontSize: 17, fontWeight: 800, color: "#fff" }}>{grand.flowPct}%</span>
-            </div>
+      {/* Grand Total */}
+      <div style={{ background: "linear-gradient(135deg,#059669,#0891b2)", borderRadius: 16, padding: "20px 24px", marginBottom: 16, display: "flex", alignItems: "center", gap: 20, boxShadow: "0 4px 20px rgba(5,150,105,0.3)" }}>
+        <div style={{ position: "relative", flexShrink: 0 }}>
+          <CircleProgress percent={grand.pct} color="#ffffff" size={90} />
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <span style={{ fontSize: 18, fontWeight: 800, color: "#fff" }}>{grand.pct}%</span>
           </div>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)" }}>{grand.flowDone} / {grand.total}</div>
         </div>
-        <div style={{ flex: 1, background: "linear-gradient(135deg,#0891b2,#0e7490)", borderRadius: 16, padding: "16px 12px", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, boxShadow: "0 4px 16px rgba(8,145,178,0.25)" }}>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.8)", fontWeight: 600, letterSpacing: "0.08em" }}>선반 피킹률</div>
-          <div style={{ position: "relative" }}>
-            <CircleProgress percent={grand.shelfPct} color="#ffffff" size={80} />
-            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <span style={{ fontSize: 17, fontWeight: 800, color: "#fff" }}>{grand.shelfPct}%</span>
-            </div>
+        <div>
+          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.75)", marginBottom: 4 }}>전체 토탈 피킹작업률</div>
+          <div style={{ fontSize: 22, fontWeight: 900, color: "#fff" }}>{grand.pct}%</div>
+          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+            {ZONES.map(z => (
+              <span key={z} style={{ fontSize: 10, padding: "2px 6px", borderRadius: 20, background: "rgba(255,255,255,0.2)", color: "#fff", border: "1px solid rgba(255,255,255,0.3)" }}>
+                {z} {stats[z].pct}%
+              </span>
+            ))}
           </div>
-          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.7)" }}>{grand.shelfDone} / {grand.total}</div>
         </div>
       </div>
 
       {/* Zone Cards */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 16 }}>
         {ZONES.map(z => {
-          const { flowPct, shelfPct, pct } = stats[z];
+          const { pct } = stats[z];
           const isActive = z === activeZone;
           const color = ZONE_COLORS[z];
           return (
             <button key={z} onClick={() => setActiveZone(z)} style={{ background: isActive ? color+"12" : S.card, border: `1.5px solid ${isActive ? color : S.border}`, borderRadius: 12, padding: "10px 6px", cursor: "pointer", textAlign: "center", boxShadow: S.shadow, transition: "all 0.2s" }}>
               <div style={{ fontSize: 11, color, fontWeight: 700, marginBottom: 3 }}>{z} 존</div>
-              <div style={{ fontSize: 16, fontWeight: 900, color: S.text, marginBottom: 4 }}>{pct}%</div>
-              <div style={{ height: 3, background: "#e2e8f0", borderRadius: 2, marginBottom: 4 }}>
-                <div style={{ height: 3, borderRadius: 2, background: color, width: `${pct}%`, transition: "width 0.4s" }} />
-              </div>
-              <div style={{ display: "flex", justifyContent: "center", gap: 6 }}>
-                <span style={{ fontSize: 9, color: "#059669", fontWeight: 600 }}>플 {flowPct}%</span>
-                <span style={{ fontSize: 9, color: "#0891b2", fontWeight: 600 }}>선 {shelfPct}%</span>
+              <div style={{ fontSize: 18, fontWeight: 900, color: S.text, marginBottom: 4 }}>{pct}%</div>
+              <div style={{ height: 4, background: "#e2e8f0", borderRadius: 2 }}>
+                <div style={{ height: 4, borderRadius: 2, background: color, width: `${pct}%`, transition: "width 0.4s" }} />
               </div>
             </button>
           );
@@ -226,16 +378,65 @@ export default function App() {
           번호 {activeLine}1 ~ {activeLine}9 · 탭하면 해당 번호까지 누적 체크
         </div>
 
+        {/* 존 전체 완료 버튼 (단계식: 불출완료 → 피킹완료) */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          {TYPES.map(type => {
+            const isPicked = (data[activeZone]._pick || {})[type] || false;
+            const allDone = LINES.every(l => data[activeZone][l][type].every(v=>v));
+            return (
+              <button key={type} onClick={() => {
+                const newZone = { ...data[activeZone] };
+                if (!allDone) {
+                  // 1단계: 불출완료 (전체 체크)
+                  LINES.forEach(l => { newZone[l] = { ...newZone[l], [type]: Array(9).fill(true) }; });
+                  newZone._pick = { ...(newZone._pick || {}), [type]: false };
+                } else if (!isPicked) {
+                  // 2단계: 피킹완료
+                  newZone._pick = { ...(newZone._pick || {}), [type]: true };
+                } else {
+                  // 3단계: 해제 (전체 초기화)
+                  LINES.forEach(l => { newZone[l] = { ...newZone[l], [type]: Array(9).fill(false) }; });
+                  newZone._pick = { ...(newZone._pick || {}), [type]: false };
+                }
+                saveData({ ...data, [activeZone]: newZone });
+              }} style={{
+                flex: 1, fontSize: 11, fontWeight: 800, padding: "8px 0", borderRadius: 9,
+                cursor: "pointer", transition: "all 0.15s",
+                background: isPicked ? "#dcfce7" : allDone ? "#fef9c3" : "#f8fafc",
+                border: `1.5px solid ${isPicked ? "#86efac" : allDone ? "#fde047" : "#e2e8f0"}`,
+                color: isPicked ? "#15803d" : allDone ? "#a16207" : "#94a3b8", fontFamily: "inherit"
+              }}>
+                {isPicked ? `✓ ${type} 피킹완료` : allDone ? `✓ ${type} 불출완료` : `${type} 불출완료`}
+              </button>
+            );
+          })}
+        </div>
+
         {/* 플로우 / 선반 체크 */}
         {TYPES.map(type => {
           const checks = data[activeZone][activeLine][type];
           const doneCnt = checks.filter(v => v).length;
           const typeColor = type === "플로우" ? "#059669" : "#0891b2";
+          const lineDone = doneCnt === 9;
           return (
             <div key={type} style={{ marginBottom: type === "플로우" ? 14 : 0 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: typeColor, background: typeColor+"12", border: `1px solid ${typeColor}33`, borderRadius: 7, padding: "3px 12px" }}>{type}</div>
-                <div style={{ fontSize: 11, color: S.textSub }}>{doneCnt} / 9 완료</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontSize: 11, color: S.textSub }}>{doneCnt} / 9 완료</div>
+                  <button onClick={() => {
+                    const newArr = Array(9).fill(!lineDone);
+                    saveData({ ...data, [activeZone]: { ...data[activeZone], [activeLine]: { ...data[activeZone][activeLine], [type]: newArr } } });
+                  }} style={{
+                    fontSize: 10, fontWeight: 800, padding: "3px 10px", borderRadius: 7,
+                    cursor: "pointer", transition: "all 0.15s",
+                    background: lineDone ? "#dcfce7" : "#f8fafc",
+                    border: `1px solid ${lineDone ? "#86efac" : "#e2e8f0"}`,
+                    color: lineDone ? "#15803d" : "#94a3b8", fontFamily: "inherit"
+                  }}>
+                    {lineDone ? "✓ 라인완료" : "라인완료"}
+                  </button>
+                </div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(9,1fr)", gap: 5 }}>
                 {NUMBERS.map((n, idx) => {
@@ -277,12 +478,103 @@ export default function App() {
         </div>
       </div>
 
+      {/* 하부 묶음 빠른입력 (비행사) */}
+      {!eventMode && (() => {
+        const SEQ_LINES = [2, 4, 3, 1];
+        const SEQ_ZONES = ["W", "T", "C", "하부", "B"];
+
+        const quickSet = (type, targetLine, targetZone, num) => {
+          const newData = { ...data };
+          SEQ_ZONES.forEach(z => { newData[z] = { ...newData[z] }; SEQ_LINES.forEach(l => { newData[z][l] = { ...newData[z][l] }; }); });
+          const tLineIdx = SEQ_LINES.indexOf(targetLine);
+          const tZoneIdx = SEQ_ZONES.indexOf(targetZone);
+          SEQ_LINES.forEach((l, li) => {
+            SEQ_ZONES.forEach((z, zi) => {
+              if (li < tLineIdx || (li === tLineIdx && zi < tZoneIdx)) {
+                newData[z][l][type] = Array(9).fill(true);
+              } else if (li === tLineIdx && zi === tZoneIdx) {
+                newData[z][l][type] = Array(9).fill(false).map((_, i) => i < num);
+              }
+            });
+          });
+          saveData(newData);
+        };
+
+        return (
+          <div style={{ background: S.card, border: `1px solid ${S.border}`, borderRadius: 16, padding: 16, marginBottom: 16, boxShadow: S.shadow }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: S.text, marginBottom: 4 }}>하부 묶음 빠른입력</div>
+            <div style={{ fontSize: 10, color: S.textSub, marginBottom: 10 }}>불출 순서: 2→4→3→1라인 · W→T→C→하부→B · 탭하면 이전 순서 전부 자동 체크</div>
+
+            {/* 타입 선택 */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+              {TYPES.map(t => (
+                <button key={t} onClick={() => setQuickType(t)} style={{ flex: 1, fontSize: 11, fontWeight: 800, padding: "6px 0", borderRadius: 8, cursor: "pointer", background: quickType===t ? (t==="플로우"?"#059669":"#0891b2") : S.inputBg, border: `1px solid ${t==="플로우"?"#059669":"#0891b2"}`, color: quickType===t?"#fff":S.textSub, fontFamily: "inherit" }}>{t}</button>
+              ))}
+            </div>
+
+            {/* 라인 선택 (불출 순서대로) */}
+            <div style={{ display: "flex", gap: 5, marginBottom: 10 }}>
+              {SEQ_LINES.map((l, i) => (
+                <button key={l} onClick={() => setQuickLine(l)} style={{ flex: 1, fontSize: 11, fontWeight: 800, padding: "6px 0", borderRadius: 8, cursor: "pointer", background: quickLine===l ? "#7c3aed" : S.inputBg, border: "1px solid #7c3aed", color: quickLine===l?"#fff":S.textSub, fontFamily: "inherit" }}>
+                  {i+1}번째 · {l}라인
+                </button>
+              ))}
+            </div>
+
+            {/* 존 × 번호 그리드 */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {SEQ_ZONES.map(z => {
+                const checks = data[z][quickLine][quickType];
+                const cnt = checks.filter(v=>v).length;
+                return (
+                  <div key={z} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: ZONE_COLORS[z], minWidth: 30 }}>{z}</div>
+                    <div style={{ flex: 1, display: "grid", gridTemplateColumns: "repeat(9,1fr)", gap: 3 }}>
+                      {Array.from({ length: 9 }, (_, i) => i + 1).map(n => {
+                        const done = checks[n-1];
+                        return (
+                          <button key={n} onClick={() => quickSet(quickType, quickLine, z, n)} style={{
+                            background: done ? ZONE_COLORS[z] : S.inputBg,
+                            border: `1px solid ${done ? ZONE_COLORS[z] : S.border}`,
+                            borderRadius: 5, padding: "5px 0", cursor: "pointer",
+                            color: done ? "#fff" : S.textSub, fontSize: 10, fontWeight: 700, fontFamily: "inherit"
+                          }}>{quickLine}{n}</button>
+                        );
+                      })}
+                    </div>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: cnt===9?"#059669":S.textSub, minWidth: 26, textAlign: "right" }}>{cnt}/9</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* 존별 요약 */}
       <div style={{ background: S.card, border: `1px solid ${S.border}`, borderRadius: 16, padding: 16, boxShadow: S.shadow }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: S.text, marginBottom: 12 }}>존별 요약</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: S.text }}>존별 요약</div>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={() => toggleEventMode(true)} style={{
+              fontSize: 10, fontWeight: 800, padding: "4px 12px", borderRadius: 8, cursor: "pointer",
+              background: eventMode ? "#dc2626" : "#f8fafc",
+              border: "1px solid #dc2626",
+              color: eventMode ? "#fff" : "#94a3b8",
+              fontFamily: "inherit", transition: "all 0.15s"
+            }}>행사</button>
+            <button onClick={() => toggleEventMode(false)} style={{
+              fontSize: 10, fontWeight: 800, padding: "4px 12px", borderRadius: 8, cursor: "pointer",
+              background: !eventMode ? "#059669" : "#f8fafc",
+              border: "1px solid #059669",
+              color: !eventMode ? "#fff" : "#94a3b8",
+              fontFamily: "inherit", transition: "all 0.15s"
+            }}>비행사</button>
+          </div>
+        </div>
 
         {/* 텍스트 미리보기 */}
-        <div style={{ background: S.inputBg, borderRadius: 10, padding: "12px 14px", marginBottom: 10, fontSize: 12, lineHeight: 1.8, color: S.textSub, fontFamily: "monospace", whiteSpace: "pre-wrap", border: `1px solid ${S.border}` }}>
+        <div style={{ background: S.inputBg, borderRadius: 10, padding: "10px 12px", marginBottom: 10, fontSize: 12, lineHeight: 1.45, color: S.textSub, fontFamily: "monospace", whiteSpace: "pre-wrap", border: `1px solid ${S.border}` }}>
           {getSummaryText()}
         </div>
         <button onClick={() => { navigator.clipboard.writeText(getSummaryText()).then(() => setCopied(true)); setTimeout(() => setCopied(false), 2000); }}
@@ -291,59 +583,18 @@ export default function App() {
         </button>
 
         {/* 존별 바 */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {ZONES.map(z => {
-            const { flowPct, shelfPct } = stats[z];
+            const { flowPct, shelfPct, pct } = stats[z];
+            const totalPct = Math.round((flowPct + shelfPct) / 2);
             const color = ZONE_COLORS[z];
             return (
-              <div key={z} style={{ background: S.inputBg, borderRadius: 10, padding: "10px 12px", border: `1px solid ${S.border}` }}>
-                {/* 존 이름 + 전체 % */}
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color }}>{z.length<=1?z+"존":z}</div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <span style={{ fontSize: 11, color: "#059669", fontWeight: 700 }}>플 {flowPct}%</span>
-                    <span style={{ fontSize: 11, color: "#0891b2", fontWeight: 700 }}>선 {shelfPct}%</span>
-                  </div>
+              <div key={z} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color, minWidth: 32 }}>{z.length<=1?z+"존":z}</div>
+                <div style={{ flex: 1, height: 8, background: "#e2e8f0", borderRadius: 4 }}>
+                  <div style={{ height: 8, borderRadius: 4, background: `linear-gradient(90deg,${color},${color}88)`, width: `${totalPct}%`, transition: "width 0.4s" }} />
                 </div>
-
-                {/* 라인별 플로우/선반 */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                  {LINES.map(l => {
-                    const flowArr = data[z][l]["플로우"];
-                    const shelfArr = data[z][l]["선반"];
-                    const flowCnt = flowArr.filter(v=>v).length;
-                    const shelfCnt = shelfArr.filter(v=>v).length;
-                    const flowLinePct = Math.round((flowCnt/9)*100);
-                    const shelfLinePct = Math.round((shelfCnt/9)*100);
-                    return (
-                      <div key={l} style={{ background: S.card, borderRadius: 8, padding: "6px 10px", border: `1px solid ${S.border}` }}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
-                          <div style={{ fontSize: 11, fontWeight: 700, color: S.textSub }}>{l}라인 ({l}1~{l}9)</div>
-                          <div style={{ display: "flex", gap: 8 }}>
-                            <span style={{ fontSize: 10, color: "#059669", fontWeight: 600 }}>{flowCnt}/9</span>
-                            <span style={{ fontSize: 10, color: "#0891b2", fontWeight: 600 }}>{shelfCnt}/9</span>
-                          </div>
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                            <div style={{ fontSize: 9, color: "#059669", minWidth: 24, fontWeight: 600 }}>플로우</div>
-                            <div style={{ flex: 1, height: 5, background: "#e2e8f0", borderRadius: 3 }}>
-                              <div style={{ height: 5, borderRadius: 3, background: "#059669", width: `${flowLinePct}%`, transition: "width 0.3s" }} />
-                            </div>
-                            <div style={{ fontSize: 10, fontWeight: 800, color: flowLinePct===100?"#059669":S.text, minWidth: 28, textAlign: "right" }}>{flowLinePct}%</div>
-                          </div>
-                          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                            <div style={{ fontSize: 9, color: "#0891b2", minWidth: 24, fontWeight: 600 }}>선반</div>
-                            <div style={{ flex: 1, height: 5, background: "#e2e8f0", borderRadius: 3 }}>
-                              <div style={{ height: 5, borderRadius: 3, background: "#0891b2", width: `${shelfLinePct}%`, transition: "width 0.3s" }} />
-                            </div>
-                            <div style={{ fontSize: 10, fontWeight: 800, color: shelfLinePct===100?"#0891b2":S.text, minWidth: 28, textAlign: "right" }}>{shelfLinePct}%</div>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                <div style={{ fontSize: 13, fontWeight: 800, minWidth: 40, textAlign: "right", color: totalPct===100?"#059669":S.text }}>{totalPct}%</div>
               </div>
             );
           })}
@@ -351,7 +602,13 @@ export default function App() {
       </div>
 
       {/* 초기화 */}
-      <button onClick={resetAll} style={{ width: "100%", background: S.card, border: "1px solid #fecaca", borderRadius: 12, padding: "12px 0", cursor: "pointer", color: "#dc2626", fontSize: 13, fontWeight: 600, marginTop: 16, boxShadow: S.shadow, fontFamily: "inherit" }}>🔄 전체 초기화</button>
+      <button onClick={nextRound} style={{ width: "100%", background: nextRoundConfirm ? "#ede9fe" : "linear-gradient(135deg,#7c3aed,#0891b2)", border: nextRoundConfirm ? "1.5px solid #7c3aed" : "none", borderRadius: 12, padding: "13px 0", cursor: "pointer", color: nextRoundConfirm ? "#7c3aed" : "#fff", fontSize: 14, fontWeight: 800, marginTop: 16, boxShadow: "0 2px 12px rgba(124,58,237,0.25)", fontFamily: "inherit" }}>
+        {nextRoundConfirm ? `한 번 더 탭하면 ${round + 1}차 시작 (기록 초기화)` : `▶ ${round + 1}차 피킹 시작`}
+      </button>
+
+      <button onClick={resetAll} style={{ width: "100%", background: resetConfirm ? "#fee2e2" : S.card, border: `1px solid ${resetConfirm ? "#dc2626" : "#fecaca"}`, borderRadius: 12, padding: "12px 0", cursor: "pointer", color: "#dc2626", fontSize: 13, fontWeight: 700, marginTop: 10, boxShadow: S.shadow, fontFamily: "inherit" }}>
+        {resetConfirm ? "한 번 더 탭하면 초기화됩니다" : "🔄 전체 초기화 (1차부터)"}
+      </button>
     </div>
   );
 }
