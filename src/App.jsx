@@ -13,6 +13,8 @@ const firebaseConfig = {
   appId: "1:440378727824:web:2c4bf51c6c57f8f7d96715"
 };
 
+const EDIT_PASSWORD = "001"; // 수정 비밀번호
+
 let fdb = null;
 try { fdb = getDatabase(initializeApp(firebaseConfig)); } catch (e) {}
 const dbSet = (p, val) => { try { if (fdb) set(ref(fdb, p), val); } catch (e) {} };
@@ -25,6 +27,14 @@ const ZONE_COLORS = {
 const LINES = [1, 2, 3, 4];
 const NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 const TYPES = ["플로우", "선반"];
+const SUB_ZONES = {
+  "상부": ["BB", "BC", "BD"],
+  "하부": ["AA", "AB", "AC", "AD"],
+};
+const SUB_ZONE_COLORS = {
+  "BB": "#7c3aed", "BC": "#9333ea", "BD": "#a855f7",
+  "AA": "#2563eb", "AB": "#1d4ed8", "AC": "#3b82f6", "AD": "#60a5fa",
+};
 
 try {
   const fontLink = document.createElement("link");
@@ -41,6 +51,17 @@ const initData = () => {
   const d = {};
   ZONES.forEach(z => {
     d[z] = {};
+    // 서브존이 있는 경우 서브존별로 초기화
+    const subs = SUB_ZONES[z];
+    if (subs) {
+      subs.forEach(sub => {
+        d[z][sub] = {};
+        LINES.forEach(l => {
+          d[z][sub][l] = {};
+          TYPES.forEach(t => { d[z][sub][l][t] = Array(9).fill(false); });
+        });
+      });
+    }
     LINES.forEach(l => {
       d[z][l] = {};
       TYPES.forEach(t => {
@@ -69,25 +90,42 @@ export default function App() {
   const [data, setData] = useState(initData);
   const [activeZone, setActiveZone] = useState(ZONES[0]);
   const [activeLine, setActiveLine] = useState(1);
+  const [activeSubZone, setActiveSubZone] = useState(null); // BB/BC/BD or AA/AB/AC/AD
+
+  const selectZone = (z) => {
+    setActiveZone(z);
+    setActiveSubZone(SUB_ZONES[z] ? SUB_ZONES[z][0] : null);
+  };
   const [copied, setCopied] = useState(false);
+  const [editable, setEditable] = useState(() => {
+    try { return localStorage.getItem("qps_editable") === "true"; } catch (e) { return false; }
+  });
+  const [showPwInput, setShowPwInput] = useState(false);
+  const [pwValue, setPwValue] = useState("");
+
+  const tryUnlock = () => {
+    if (pwValue === EDIT_PASSWORD) {
+      setEditable(true);
+      try { localStorage.setItem("qps_editable", "true"); } catch (e) {}
+      setShowPwInput(false); setPwValue("");
+    } else {
+      setPwValue("");
+    }
+  };
+
+  const lockEdit = () => {
+    setEditable(false);
+    try { localStorage.setItem("qps_editable", "false"); } catch (e) {}
+  };
+
   const [round, setRound] = useState(() => {
     try { const s = localStorage.getItem("qps_round"); if (s) return parseInt(s) || 1; } catch (e) {}
     return 1;
   });
   const [nextRoundConfirm, setNextRoundConfirm] = useState(false);
-  const [quickType, setQuickType] = useState("플로우");
-  const [quickLine, setQuickLine] = useState(2);
-  const [eventMode, setEventMode] = useState(() => {
-    try { const s = localStorage.getItem("qps_event_mode"); if (s !== null) return s === "true"; } catch (e) {}
-    return true; // true = 행사, false = 비행사
-  });
-
-  const toggleEventMode = (v) => {
-    setEventMode(v);
-    try { localStorage.setItem("qps_event_mode", String(v)); } catch (e) {}
-  };
 
   const saveData = (newData) => {
+    if (!editable) return; // 보기 전용
     setData(newData);
     try { localStorage.setItem("qps_data", JSON.stringify(newData)); } catch (e) {}
     dbSet("qps/data", newData);
@@ -111,8 +149,9 @@ export default function App() {
   }, []);
 
   // 번호 토글 — 해당 번호까지 누적 체크
-  const toggleNum = (zone, line, type, idx) => {
-    const current = data[zone][line][type];
+  const toggleNum = (zone, line, type, idx, sub) => {
+    const zd = data[zone];
+    const current = sub ? zd[sub][line][type] : zd[line][type];
     const allChecked = current.slice(0, idx + 1).every(v => v);
     const newArr = [...current];
     if (allChecked) {
@@ -120,19 +159,16 @@ export default function App() {
     } else {
       for (let i = 0; i <= idx; i++) newArr[i] = true;
     }
-    const newData = {
-      ...data,
-      [zone]: {
-        ...data[zone],
-        [line]: { ...data[zone][line], [type]: newArr }
-      }
-    };
+    const newData = sub
+      ? { ...data, [zone]: { ...zd, [sub]: { ...zd[sub], [line]: { ...zd[sub][line], [type]: newArr } } } }
+      : { ...data, [zone]: { ...zd, [line]: { ...zd[line], [type]: newArr } } };
     saveData(newData);
   };
 
   const [resetConfirm, setResetConfirm] = useState(false);
 
   const resetAll = () => {
+    if (!editable) return;
     if (!resetConfirm) {
       setResetConfirm(true);
       setTimeout(() => setResetConfirm(false), 3000);
@@ -154,6 +190,7 @@ export default function App() {
   };
 
   const nextRound = () => {
+    if (!editable) return;
     if (!nextRoundConfirm) {
       setNextRoundConfirm(true);
       setTimeout(() => setNextRoundConfirm(false), 3000);
@@ -180,11 +217,22 @@ export default function App() {
     const out = {};
     ZONES.forEach(z => {
       let flowDone = 0, shelfDone = 0;
-      const total = LINES.length * 9;
-      LINES.forEach(l => {
-        flowDone += data[z][l]["플로우"].filter(v => v).length;
-        shelfDone += data[z][l]["선반"].filter(v => v).length;
-      });
+      const subs = SUB_ZONES[z];
+      const subCount = subs ? subs.length : 1;
+      const total = LINES.length * 9 * subCount;
+      if (subs) {
+        subs.forEach(sub => {
+          LINES.forEach(l => {
+            flowDone += ((data[z][sub] || {})[l] || {})["플로우"]?.filter(v=>v).length || 0;
+            shelfDone += ((data[z][sub] || {})[l] || {})["선반"]?.filter(v=>v).length || 0;
+          });
+        });
+      } else {
+        LINES.forEach(l => {
+          flowDone += data[z][l]["플로우"].filter(v => v).length;
+          shelfDone += data[z][l]["선반"].filter(v => v).length;
+        });
+      }
       out[z] = {
         flowDone, shelfDone, total,
         flowPct: Math.round((flowDone / total) * 100),
@@ -231,8 +279,8 @@ export default function App() {
 
     const lineOrder = [2, 4, 3, 1];
 
-    // 요약 그룹: 행사 = 존별 / 비행사 = 묶음 피킹
-    const GROUPS = eventMode ? [
+    // 요약 그룹: 존별 (C/T 묶음)
+    const GROUPS = [
       { name: "상부", zones: ["상부"] },
       { name: "하부", zones: ["하부"] },
       { name: "B존", zones: ["B"] },
@@ -241,39 +289,57 @@ export default function App() {
       { name: "W존", zones: ["W"] },
       { name: "Z존", zones: ["Z"] },
       { name: "C/T", zones: ["C", "T"] },
-    ] : [
-      { name: "상부", zones: ["상부"] },
-      { name: "지하", zones: ["P", "Z"] },
-      { name: "하부", zones: ["하부", "B", "C", "T", "W"] },
-      { name: "D존", zones: ["D"] },
     ];
 
-    // 그룹 상태 계산 (멤버 존 합산)
+    // 그룹 상태 계산 (멤버 존 합산, 서브존 포함)
     const getGroupStatus = (zones) => {
-      const flowTotal = zones.length * LINES.length * 9;
-      const shelfTotal = zones.length * LINES.length * 9;
-      let flowDone = 0, shelfDone = 0;
-      zones.forEach(z => LINES.forEach(l => {
-        flowDone += data[z][l]["플로우"].filter(v=>v).length;
-        shelfDone += data[z][l]["선반"].filter(v=>v).length;
-      }));
+      let flowTotal = 0, shelfTotal = 0, flowDone = 0, shelfDone = 0;
+      zones.forEach(z => {
+        const subs = SUB_ZONES[z];
+        const subCount = subs ? subs.length : 1;
+        flowTotal += LINES.length * 9 * subCount;
+        shelfTotal += LINES.length * 9 * subCount;
+        if (subs) {
+          subs.forEach(sub => LINES.forEach(l => {
+            flowDone += (((data[z][sub] || {})[l] || {})["플로우"] || []).filter(v=>v).length;
+            shelfDone += (((data[z][sub] || {})[l] || {})["선반"] || []).filter(v=>v).length;
+          }));
+        } else {
+          LINES.forEach(l => {
+            flowDone += (data[z][l]["플로우"] || []).filter(v=>v).length;
+            shelfDone += (data[z][l]["선반"] || []).filter(v=>v).length;
+          });
+        }
+      });
       const flowPick = zones.every(z => (data[z]._pick || {})["플로우"]);
       const shelfPick = zones.every(z => (data[z]._pick || {})["선반"]);
       const flowAll = flowDone === flowTotal;
       const shelfAll = shelfDone === shelfTotal;
 
-      // 마지막 번호: 가장 진행이 느린 존 기준 (불출 순서 2→4→3→1)
+      // 마지막 번호: 서브존 포함
       const lastNum = (type) => {
-        // 현재 불출 위치 = 가장 많이 진행된 존의 마지막 번호
         let maxPos = -1, maxInfo = null;
         zones.forEach(z => {
-          let pos = 0, info = null;
-          lineOrder.forEach(l => {
-            const cnt = data[z][l][type].filter(v=>v).length;
-            pos += cnt;
-            if (cnt > 0) info = { line: l, num: `${l}${cnt}`, zone: z.length<=1 ? z+"존" : z };
-          });
-          if (pos > maxPos && info) { maxPos = pos; maxInfo = info; }
+          const subs = SUB_ZONES[z];
+          if (subs) {
+            subs.forEach(sub => {
+              let pos = 0, info = null;
+              lineOrder.forEach(l => {
+                const cnt = (((data[z][sub] || {})[l] || {})[type] || []).filter(v=>v).length;
+                pos += cnt;
+                if (cnt > 0) info = { line: l, num: `${l}${cnt}`, zone: sub };
+              });
+              if (pos > maxPos && info) { maxPos = pos; maxInfo = info; }
+            });
+          } else {
+            let pos = 0, info = null;
+            lineOrder.forEach(l => {
+              const cnt = (data[z][l][type] || []).filter(v=>v).length;
+              pos += cnt;
+              if (cnt > 0) info = { line: l, num: `${l}${cnt}`, zone: z.length<=1 ? z+"존" : z };
+            });
+            if (pos > maxPos && info) { maxPos = pos; maxInfo = info; }
+          }
         });
         return maxInfo;
       };
@@ -295,9 +361,14 @@ export default function App() {
       return [fp, sp].filter(Boolean).join(" / ") || "미시작";
     };
 
-    // 전존 완료 체크
-    const allFlow = ZONES.every(z => LINES.every(l => data[z][l]["플로우"].every(v=>v)));
-    const allShelf = ZONES.every(z => LINES.every(l => data[z][l]["선반"].every(v=>v)));
+    // 전존 완료 체크 (서브존 포함)
+    const zoneTypeDone = (z, type) => {
+      const subs = SUB_ZONES[z];
+      if (subs) return subs.every(sub => LINES.every(l => (((data[z][sub] || {})[l] || {})[type] || []).every(v=>v)));
+      return LINES.every(l => (data[z][l][type] || []).every(v=>v));
+    };
+    const allFlow = ZONES.every(z => zoneTypeDone(z, "플로우"));
+    const allShelf = ZONES.every(z => zoneTypeDone(z, "선반"));
 
     if (allFlow && allShelf) {
       lines.push(`전체 불출완료`);
@@ -356,6 +427,29 @@ export default function App() {
         <div style={{ display: "inline-block", marginTop: 8, fontSize: 13, fontWeight: 900, color: "#7c3aed", background: "#7c3aed15", border: "1.5px solid #7c3aed44", borderRadius: 20, padding: "4px 16px" }}>
           {round}차 피킹
         </div>
+
+        {/* 잠금 상태 */}
+        <div style={{ marginTop: 10 }}>
+          {editable ? (
+            <button onClick={lockEdit} style={{ fontSize: 11, fontWeight: 700, padding: "5px 16px", borderRadius: 20, cursor: "pointer", background: "#dcfce7", border: "1px solid #86efac", color: "#15803d", fontFamily: "inherit" }}>
+              🔓 수정 가능 · 탭하여 잠금
+            </button>
+          ) : showPwInput ? (
+            <div style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center" }}>
+              <input type="password" inputMode="numeric" value={pwValue} autoFocus
+                onChange={e => setPwValue(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && tryUnlock()}
+                placeholder="비밀번호"
+                style={{ width: 100, background: "#fff", border: "1.5px solid #7c3aed", borderRadius: 10, padding: "6px 10px", fontSize: 14, fontWeight: 700, outline: "none", textAlign: "center", fontFamily: "inherit" }} />
+              <button onClick={tryUnlock} style={{ fontSize: 12, fontWeight: 800, padding: "7px 14px", borderRadius: 10, cursor: "pointer", background: "#7c3aed", border: "none", color: "#fff", fontFamily: "inherit" }}>확인</button>
+              <button onClick={() => { setShowPwInput(false); setPwValue(""); }} style={{ fontSize: 12, fontWeight: 700, padding: "7px 10px", borderRadius: 10, cursor: "pointer", background: "#f8fafc", border: "1px solid #e2e8f0", color: "#94a3b8", fontFamily: "inherit" }}>취소</button>
+            </div>
+          ) : (
+            <button onClick={() => setShowPwInput(true)} style={{ fontSize: 11, fontWeight: 700, padding: "5px 16px", borderRadius: 20, cursor: "pointer", background: "#f8fafc", border: "1px solid #e2e8f0", color: "#94a3b8", fontFamily: "inherit" }}>
+              🔒 보기 전용 · 탭하여 잠금해제
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Grand Total */}
@@ -386,7 +480,7 @@ export default function App() {
           const isActive = z === activeZone;
           const color = ZONE_COLORS[z];
           return (
-            <button key={z} onClick={() => setActiveZone(z)} style={{ background: isActive ? color+"12" : S.card, border: `1.5px solid ${isActive ? color : S.border}`, borderRadius: 12, padding: "10px 6px", cursor: "pointer", textAlign: "center", boxShadow: S.shadow, transition: "all 0.2s" }}>
+            <button key={z} onClick={() => selectZone(z)} style={{ background: isActive ? color+"12" : S.card, border: `1.5px solid ${isActive ? color : S.border}`, borderRadius: 12, padding: "10px 6px", cursor: "pointer", textAlign: "center", boxShadow: S.shadow, transition: "all 0.2s" }}>
               <div style={{ fontSize: 11, color, fontWeight: 700, marginBottom: 3 }}>{z} 존</div>
               <div style={{ fontSize: 18, fontWeight: 900, color: S.text, marginBottom: 4 }}>{pct}%</div>
               <div style={{ height: 4, background: "#e2e8f0", borderRadius: 2 }}>
@@ -400,7 +494,7 @@ export default function App() {
       {/* 체크 패널 */}
       <div style={{ background: S.card, border: `1.5px solid ${activeColor}`, borderRadius: 16, padding: 16, marginBottom: 16, boxShadow: S.shadowMd }}>
         {/* 존 + 라인 선택 */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: SUB_ZONES[activeZone] ? 8 : 14 }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: activeColor }}>{activeZone} 존</div>
           <div style={{ display: "flex", gap: 6 }}>
             {LINES.map(l => (
@@ -415,28 +509,47 @@ export default function App() {
           </div>
         </div>
 
+        {/* 서브존 탭 (상부/하부만) */}
+        {SUB_ZONES[activeZone] && (
+          <div style={{ display: "flex", gap: 5, marginBottom: 12 }}>
+            {SUB_ZONES[activeZone].map(sub => (
+              <button key={sub} onClick={() => setActiveSubZone(sub)} style={{
+                flex: 1, fontSize: 11, fontWeight: 800, padding: "5px 0", borderRadius: 8, cursor: "pointer",
+                background: activeSubZone === sub ? (SUB_ZONE_COLORS[sub] || activeColor) : S.inputBg,
+                border: `1px solid ${SUB_ZONE_COLORS[sub] || activeColor}`,
+                color: activeSubZone === sub ? "#fff" : S.textSub,
+                fontFamily: "inherit", transition: "all 0.15s"
+              }}>{sub}</button>
+            ))}
+          </div>
+        )}
+
         <div style={{ fontSize: 11, color: S.textSub, marginBottom: 10, fontWeight: 500 }}>
-          번호 {activeLine}1 ~ {activeLine}9 · 탭하면 해당 번호까지 누적 체크
+          {activeSubZone ? `${activeSubZone} · ` : ""}{activeLine}라인 · 탭하면 해당 번호까지 누적 체크
         </div>
 
         {/* 존 전체 완료 버튼 (단계식: 불출완료 → 피킹완료) */}
         <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
           {TYPES.map(type => {
             const isPicked = (data[activeZone]._pick || {})[type] || false;
-            const allDone = LINES.every(l => data[activeZone][l][type].every(v=>v));
+            const getLineData = (z, sub, l, t) => sub ? ((data[z][sub] || {})[l] || {})[t] || [] : (data[z][l] || {})[t] || [];
+            const allDone = LINES.every(l => getLineData(activeZone, activeSubZone, l, type).every(v=>v));
             return (
               <button key={type} onClick={() => {
                 const newZone = { ...data[activeZone] };
+                const fill = !allDone ? Array(9).fill(true) : Array(9).fill(false);
+                if (activeSubZone) {
+                  LINES.forEach(l => {
+                    newZone[activeSubZone] = { ...(newZone[activeSubZone] || {}), [l]: { ...((newZone[activeSubZone] || {})[l] || {}), [type]: fill } };
+                  });
+                } else {
+                  LINES.forEach(l => { newZone[l] = { ...newZone[l], [type]: fill }; });
+                }
                 if (!allDone) {
-                  // 1단계: 불출완료 (전체 체크)
-                  LINES.forEach(l => { newZone[l] = { ...newZone[l], [type]: Array(9).fill(true) }; });
                   newZone._pick = { ...(newZone._pick || {}), [type]: false };
-                } else if (!isPicked) {
-                  // 2단계: 피킹완료
+                } else if (!isPicked && fill[0] === false) {
                   newZone._pick = { ...(newZone._pick || {}), [type]: true };
                 } else {
-                  // 3단계: 해제 (전체 초기화)
-                  LINES.forEach(l => { newZone[l] = { ...newZone[l], [type]: Array(9).fill(false) }; });
                   newZone._pick = { ...(newZone._pick || {}), [type]: false };
                 }
                 saveData({ ...data, [activeZone]: newZone });
@@ -455,7 +568,10 @@ export default function App() {
 
         {/* 플로우 / 선반 체크 */}
         {TYPES.map(type => {
-          const checks = data[activeZone][activeLine][type];
+          const rawChecks = activeSubZone
+            ? ((data[activeZone][activeSubZone] || {})[activeLine] || {})[type] || Array(9).fill(false)
+            : data[activeZone][activeLine][type];
+          const checks = rawChecks;
           const doneCnt = checks.filter(v => v).length;
           const typeColor = type === "플로우" ? "#059669" : "#0891b2";
           const lineDone = doneCnt === 9;
@@ -467,7 +583,10 @@ export default function App() {
                   <div style={{ fontSize: 11, color: S.textSub }}>{doneCnt} / 9 완료</div>
                   <button onClick={() => {
                     const newArr = Array(9).fill(!lineDone);
-                    saveData({ ...data, [activeZone]: { ...data[activeZone], [activeLine]: { ...data[activeZone][activeLine], [type]: newArr } } });
+                    const newZone = activeSubZone
+                      ? { ...data[activeZone], [activeSubZone]: { ...(data[activeZone][activeSubZone] || {}), [activeLine]: { ...((data[activeZone][activeSubZone] || {})[activeLine] || {}), [type]: newArr } } }
+                      : { ...data[activeZone], [activeLine]: { ...data[activeZone][activeLine], [type]: newArr } };
+                    saveData({ ...data, [activeZone]: newZone });
                   }} style={{
                     fontSize: 10, fontWeight: 800, padding: "3px 10px", borderRadius: 7,
                     cursor: "pointer", transition: "all 0.15s",
@@ -484,7 +603,7 @@ export default function App() {
                   const done = checks[idx];
                   const label = `${activeLine}${n}`;
                   return (
-                    <button key={n} onClick={() => toggleNum(activeZone, activeLine, type, idx)} style={{
+                    <button key={n} onClick={() => toggleNum(activeZone, activeLine, type, idx, activeSubZone)} style={{
                       background: done ? typeColor : S.inputBg,
                       border: `1.5px solid ${done ? typeColor : S.border}`,
                       borderRadius: 8, padding: "8px 2px", cursor: "pointer",
@@ -519,100 +638,9 @@ export default function App() {
         </div>
       </div>
 
-      {/* 하부 묶음 빠른입력 (비행사) */}
-      {!eventMode && (() => {
-        const SEQ_LINES = [2, 4, 3, 1];
-        const SEQ_ZONES = ["W", "T", "C", "하부", "B"];
-
-        const quickSet = (type, targetLine, targetZone, num) => {
-          const newData = { ...data };
-          SEQ_ZONES.forEach(z => { newData[z] = { ...newData[z] }; SEQ_LINES.forEach(l => { newData[z][l] = { ...newData[z][l] }; }); });
-          const tLineIdx = SEQ_LINES.indexOf(targetLine);
-          const tZoneIdx = SEQ_ZONES.indexOf(targetZone);
-          SEQ_LINES.forEach((l, li) => {
-            SEQ_ZONES.forEach((z, zi) => {
-              if (li < tLineIdx || (li === tLineIdx && zi < tZoneIdx)) {
-                newData[z][l][type] = Array(9).fill(true);
-              } else if (li === tLineIdx && zi === tZoneIdx) {
-                newData[z][l][type] = Array(9).fill(false).map((_, i) => i < num);
-              }
-            });
-          });
-          saveData(newData);
-        };
-
-        return (
-          <div style={{ background: S.card, border: `1px solid ${S.border}`, borderRadius: 16, padding: 16, marginBottom: 16, boxShadow: S.shadow }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: S.text, marginBottom: 4 }}>하부 묶음 빠른입력</div>
-            <div style={{ fontSize: 10, color: S.textSub, marginBottom: 10 }}>불출 순서: 2→4→3→1라인 · W→T→C→하부→B · 탭하면 이전 순서 전부 자동 체크</div>
-
-            {/* 타입 선택 */}
-            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-              {TYPES.map(t => (
-                <button key={t} onClick={() => setQuickType(t)} style={{ flex: 1, fontSize: 11, fontWeight: 800, padding: "6px 0", borderRadius: 8, cursor: "pointer", background: quickType===t ? (t==="플로우"?"#059669":"#0891b2") : S.inputBg, border: `1px solid ${t==="플로우"?"#059669":"#0891b2"}`, color: quickType===t?"#fff":S.textSub, fontFamily: "inherit" }}>{t}</button>
-              ))}
-            </div>
-
-            {/* 라인 선택 (불출 순서대로) */}
-            <div style={{ display: "flex", gap: 5, marginBottom: 10 }}>
-              {SEQ_LINES.map((l, i) => (
-                <button key={l} onClick={() => setQuickLine(l)} style={{ flex: 1, fontSize: 11, fontWeight: 800, padding: "6px 0", borderRadius: 8, cursor: "pointer", background: quickLine===l ? "#7c3aed" : S.inputBg, border: "1px solid #7c3aed", color: quickLine===l?"#fff":S.textSub, fontFamily: "inherit" }}>
-                  {i+1}번째 · {l}라인
-                </button>
-              ))}
-            </div>
-
-            {/* 존 × 번호 그리드 */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {SEQ_ZONES.map(z => {
-                const checks = data[z][quickLine][quickType];
-                const cnt = checks.filter(v=>v).length;
-                return (
-                  <div key={z} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: ZONE_COLORS[z], minWidth: 30 }}>{z}</div>
-                    <div style={{ flex: 1, display: "grid", gridTemplateColumns: "repeat(9,1fr)", gap: 3 }}>
-                      {Array.from({ length: 9 }, (_, i) => i + 1).map(n => {
-                        const done = checks[n-1];
-                        return (
-                          <button key={n} onClick={() => quickSet(quickType, quickLine, z, n)} style={{
-                            background: done ? ZONE_COLORS[z] : S.inputBg,
-                            border: `1px solid ${done ? ZONE_COLORS[z] : S.border}`,
-                            borderRadius: 5, padding: "5px 0", cursor: "pointer",
-                            color: done ? "#fff" : S.textSub, fontSize: 10, fontWeight: 700, fontFamily: "inherit"
-                          }}>{quickLine}{n}</button>
-                        );
-                      })}
-                    </div>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: cnt===9?"#059669":S.textSub, minWidth: 26, textAlign: "right" }}>{cnt}/9</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })()}
-
       {/* 존별 요약 */}
       <div style={{ background: S.card, border: `1px solid ${S.border}`, borderRadius: 16, padding: 16, boxShadow: S.shadow }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: S.text }}>존별 요약</div>
-          <div style={{ display: "flex", gap: 4 }}>
-            <button onClick={() => toggleEventMode(true)} style={{
-              fontSize: 10, fontWeight: 800, padding: "4px 12px", borderRadius: 8, cursor: "pointer",
-              background: eventMode ? "#dc2626" : "#f8fafc",
-              border: "1px solid #dc2626",
-              color: eventMode ? "#fff" : "#94a3b8",
-              fontFamily: "inherit", transition: "all 0.15s"
-            }}>행사</button>
-            <button onClick={() => toggleEventMode(false)} style={{
-              fontSize: 10, fontWeight: 800, padding: "4px 12px", borderRadius: 8, cursor: "pointer",
-              background: !eventMode ? "#059669" : "#f8fafc",
-              border: "1px solid #059669",
-              color: !eventMode ? "#fff" : "#94a3b8",
-              fontFamily: "inherit", transition: "all 0.15s"
-            }}>비행사</button>
-          </div>
-        </div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: S.text, marginBottom: 12 }}>존별 요약</div>
 
         {/* 텍스트 미리보기 */}
         <div style={{ background: S.inputBg, borderRadius: 10, padding: "10px 12px", marginBottom: 10, fontSize: 12, lineHeight: 1.45, color: S.textSub, fontFamily: "monospace", whiteSpace: "pre-wrap", border: `1px solid ${S.border}` }}>
