@@ -26,7 +26,12 @@ const ZONE_COLORS = {
 const LINES = [1, 2, 3, 4];
 const NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 const TYPES = ["플로우", "선반"];
-const MACHINES = { 1: [1, 2], 2: [3, 4] }; // 1호기=1/2라인, 2호기=3/4라인
+const MACHINES = { 1: [1, 2], 2: [3, 4] };
+// 타입별 불출 순서
+const LINE_ORDER = {
+  "플로우": [1, 2, 3, 4],  // 1호기(1,2라인) → 2호기(3,4라인)
+  "선반":   [2, 4, 3, 1],  // 2→4→3→1
+};
 
 // 라인 내 서브존: data[zone][line][subzone][type]
 const SUB_ZONES = {
@@ -108,6 +113,30 @@ export default function App() {
   });
   const [nextRoundConfirm, setNextRoundConfirm] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
+  const [zoneResetConfirm, setZoneResetConfirm] = useState(null);
+
+  const resetZone = (z, e) => {
+    e.stopPropagation();
+    if (!editable) return;
+    if (zoneResetConfirm !== z) {
+      setZoneResetConfirm(z);
+      setTimeout(() => setZoneResetConfirm(null), 3000);
+      return;
+    }
+    const subs = SUB_ZONES[z];
+    const newZone = { _pick: {} };
+    LINES.forEach(l => {
+      if (subs) {
+        newZone[l] = {};
+        subs.forEach(sub => { newZone[l][sub] = {}; TYPES.forEach(t => { newZone[l][sub][t] = Array(9).fill(false); }); });
+      } else {
+        newZone[l] = {};
+        TYPES.forEach(t => { newZone[l][t] = Array(9).fill(false); });
+      }
+    });
+    saveData({ ...data, [z]: newZone });
+    setZoneResetConfirm(null);
+  };
 
   const saveData = (d) => {
     if (!editable) return;
@@ -139,17 +168,26 @@ export default function App() {
     const newArr = [...current];
     if (allChecked) { for (let i = idx; i < 9; i++) newArr[i] = false; }
     else { for (let i = 0; i <= idx; i++) newArr[i] = true; }
-    let newZone;
+
+    let newZone = { ...zd };
     if (sub) {
-      newZone = { ...zd, [line]: { ...zd[line], [sub]: { ...(zd[line][sub] || {}), [type]: newArr } } };
+      // 서브존 순서대로 이전 서브존 전체 자동체크
+      const subOrder = SUB_ZONES[zone] || [];
+      const subIdx = subOrder.indexOf(sub);
+      newZone[line] = { ...newZone[line] };
+      // 이전 서브존들 전체 체크
+      if (!allChecked) {
+        for (let si = 0; si < subIdx; si++) {
+          const prevSub = subOrder[si];
+          newZone[line][prevSub] = { ...(newZone[line][prevSub] || {}), [type]: Array(9).fill(true) };
+        }
+      }
+      newZone[line][sub] = { ...(newZone[line][sub] || {}), [type]: newArr };
     } else {
-      newZone = { ...zd, [line]: { ...zd[line], [type]: newArr } };
+      newZone[line] = { ...newZone[line], [type]: newArr };
     }
-    // 9번까지 전체 체크되면 불출완료 자동 표시 (pickKey는 그대로 - 피킹완료는 수동)
     const pickKey = `line_${line}_${type}`;
-    const isAllDone = newArr.every(v => v);
-    if (!isAllDone) {
-      // 해제 시 피킹완료도 해제
+    if (!newArr.every(v => v)) {
       newZone._pick = { ...(newZone._pick || {}), [pickKey]: false };
     }
     saveData({ ...data, [zone]: newZone });
@@ -318,7 +356,7 @@ export default function App() {
     const timeStr = `${now.getHours()}시${now.getMinutes().toString().padStart(2,"0")}분`;
     const month = now.getMonth() + 1, day = now.getDate();
     const lines = [`QPS ${round}차 (${timeStr})`, `${month}월${day}일자`, `──────────────`];
-    const lineOrder = [2, 4, 3, 1];
+    const lineOrderMap = { "플로우": [1, 2, 3, 4], "선반": [2, 4, 3, 1] };
 
     const GROUPS = [
       { name: "상부", zones: ["상부"] },
@@ -333,8 +371,7 @@ export default function App() {
 
     const getLastNum = (z, type) => {
       const subs = SUB_ZONES[z];
-      // 불출 순서(2→4→3→1) 기준으로 전체 진행 위치를 시퀀스로 계산
-      // 가장 마지막으로 체크된 위치(라인+번호+서브존)를 찾음
+      const lineOrder = lineOrderMap[type];
       let maxSeq = -1, maxInfo = null;
       lineOrder.forEach((l, li) => {
         if (subs) {
@@ -502,13 +539,20 @@ export default function App() {
           const isActive = z === activeZone;
           const color = ZONE_COLORS[z];
           return (
-            <button key={z} onClick={()=>selectZone(z)} style={{ background:isActive?color+"12":S.card, border:`1.5px solid ${isActive?color:S.border}`, borderRadius:12, padding:"10px 6px", cursor:"pointer", textAlign:"center", boxShadow:S.shadow, transition:"all 0.2s" }}>
-              <div style={{ fontSize:11, color, fontWeight:700, marginBottom:3 }}>{z} 존</div>
-              <div style={{ fontSize:18, fontWeight:900, color:S.text, marginBottom:4 }}>{pct}%</div>
-              <div style={{ height:4, background:"#e2e8f0", borderRadius:2 }}>
-                <div style={{ height:4, borderRadius:2, background:color, width:`${pct}%`, transition:"width 0.4s" }} />
-              </div>
-            </button>
+            <div key={z} style={{ position:"relative" }}>
+              <button onClick={()=>selectZone(z)} style={{ width:"100%", background:isActive?color+"12":S.card, border:`1.5px solid ${isActive?color:S.border}`, borderRadius:12, padding:"10px 6px", cursor:"pointer", textAlign:"center", boxShadow:S.shadow, transition:"all 0.2s" }}>
+                <div style={{ fontSize:11, color, fontWeight:700, marginBottom:3 }}>{z} 존</div>
+                <div style={{ fontSize:18, fontWeight:900, color:S.text, marginBottom:4 }}>{pct}%</div>
+                <div style={{ height:4, background:"#e2e8f0", borderRadius:2 }}>
+                  <div style={{ height:4, borderRadius:2, background:color, width:`${pct}%`, transition:"width 0.4s" }} />
+                </div>
+              </button>
+              {editable && (
+                <button onClick={e=>resetZone(z, e)} style={{ position:"absolute", top:4, right:4, fontSize:9, fontWeight:700, padding:"2px 5px", borderRadius:5, cursor:"pointer", background:zoneResetConfirm===z?"#fee2e2":"#f8fafc", border:`1px solid ${zoneResetConfirm===z?"#fecaca":"#e2e8f0"}`, color:zoneResetConfirm===z?"#dc2626":"#94a3b8", fontFamily:"inherit" }}>
+                  {zoneResetConfirm===z?"확인":"↺"}
+                </button>
+              )}
+            </div>
           );
         })}
       </div>
@@ -545,14 +589,14 @@ export default function App() {
               const allDone = subs
                 ? subs.every(sub => (((data[activeZone][activeLine]||{})[sub]||{})[type]||[]).every(v=>v))
                 : ((data[activeZone][activeLine]||{})[type]||[]).every(v=>v);
-              const LINE_ORDER = [2, 4, 3, 1];
-              const lineIdx = LINE_ORDER.indexOf(activeLine);
+              const LINE_ORDER = { "플로우": [1, 2, 3, 4], "선반": [2, 4, 3, 1] };
+              const lineIdx = LINE_ORDER[type].indexOf(activeLine);
               return (
                 <button key={type} onClick={() => {
                   const newZone = { ...data[activeZone] };
                   if (!isPicked) {
                     // 피킹완료: 현재 라인 + 이전 라인(순서 기준) 전부 체크 + 피킹완료
-                    LINE_ORDER.slice(0, lineIdx + 1).forEach(l => {
+                    LINE_ORDER[type].slice(0, lineIdx + 1).forEach(l => {
                       if (subs) {
                         subs.forEach(sub => {
                           newZone[l] = { ...newZone[l], [sub]: { ...(newZone[l][sub]||{}), [type]: Array(9).fill(true) } };
