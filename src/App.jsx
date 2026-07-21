@@ -1,5 +1,5 @@
 /* eslint-disable */
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, set, onValue } from "firebase/database";
 
@@ -148,10 +148,14 @@ export default function App() {
   useEffect(() => {
     if (!fdb) return;
     const u1 = onValue(ref(fdb, "qps/data"), snap => {
+      if (resettingRef.current) return;
       const v = snap.val();
       if (v) { setData(v); try { localStorage.setItem("qps_data", JSON.stringify(v)); } catch (e) {} }
     });
-    const u2 = onValue(ref(fdb, "qps/round"), snap => { const v = snap.val(); if (v) setRound(v); });
+    const u2 = onValue(ref(fdb, "qps/round"), snap => {
+      if (resettingRef.current) return;
+      const v = snap.val(); if (v) setRound(v);
+    });
     return () => { u1(); u2(); };
   }, []);
 
@@ -251,29 +255,35 @@ export default function App() {
     saveData({ ...data, [zone]: newZone });
   };
 
+  const resettingRef = useRef(false);
+
   const resetAll = () => {
     if (!resetConfirm) { setResetConfirm(true); setTimeout(() => setResetConfirm(false), 3000); return; }
     const d = initData();
-    setData(d);
-    try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
+    resettingRef.current = true;
     dbSet("qps/data", d);
-    setRound(1);
-    try { localStorage.setItem("qps_round", "1"); } catch (e) {}
     dbSet("qps/round", 1);
+    setData(d);
+    setRound(1);
+    try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
+    try { localStorage.setItem("qps_round", "1"); } catch (e) {}
     setResetConfirm(false);
+    setTimeout(() => { resettingRef.current = false; }, 2000);
   };
 
   const nextRound = () => {
     if (!nextRoundConfirm) { setNextRoundConfirm(true); setTimeout(() => setNextRoundConfirm(false), 3000); return; }
     const d = initData();
-    setData(d);
-    try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
-    dbSet("qps/data", d);
     const nr = round + 1;
-    setRound(nr);
-    try { localStorage.setItem("qps_round", String(nr)); } catch (e) {}
+    resettingRef.current = true;
+    dbSet("qps/data", d);
     dbSet("qps/round", nr);
+    setData(d);
+    setRound(nr);
+    try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
+    try { localStorage.setItem("qps_round", String(nr)); } catch (e) {}
     setNextRoundConfirm(false);
+    setTimeout(() => { resettingRef.current = false; }, 2000);
   };
 
   // 퍼센트 계산: 라인 기준 (서브존은 평균)
