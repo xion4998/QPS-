@@ -254,7 +254,9 @@ export default function App() {
   const resetAll = () => {
     if (!resetConfirm) { setResetConfirm(true); setTimeout(() => setResetConfirm(false), 3000); return; }
     const d = initData();
-    saveData(d);
+    setData(d);
+    try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
+    dbSet("qps/data", d);
     setRound(1);
     try { localStorage.setItem("qps_round", "1"); } catch (e) {}
     dbSet("qps/round", 1);
@@ -264,7 +266,9 @@ export default function App() {
   const nextRound = () => {
     if (!nextRoundConfirm) { setNextRoundConfirm(true); setTimeout(() => setNextRoundConfirm(false), 3000); return; }
     const d = initData();
-    saveData(d);
+    setData(d);
+    try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
+    dbSet("qps/data", d);
     const nr = round + 1;
     setRound(nr);
     try { localStorage.setItem("qps_round", String(nr)); } catch (e) {}
