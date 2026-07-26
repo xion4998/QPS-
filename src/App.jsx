@@ -259,6 +259,7 @@ export default function App() {
 
   const resetAll = () => {
     if (!resetConfirm) { setResetConfirm(true); setTimeout(() => setResetConfirm(false), 3000); return; }
+    try { localStorage.removeItem("qps_data"); localStorage.removeItem("qps_round"); } catch (e) {}
     const d = initData();
     resettingRef.current = true;
     dbSet("qps/data", d);
@@ -273,6 +274,7 @@ export default function App() {
 
   const nextRound = () => {
     if (!nextRoundConfirm) { setNextRoundConfirm(true); setTimeout(() => setNextRoundConfirm(false), 3000); return; }
+    try { localStorage.removeItem("qps_data"); } catch (e) {}
     const d = initData();
     const nr = round + 1;
     resettingRef.current = true;
