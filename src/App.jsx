@@ -150,7 +150,12 @@ export default function App() {
     const u1 = onValue(ref(fdb, "qps/data"), snap => {
       if (resettingRef.current) return;
       const v = snap.val();
-      if (v) { setData(v); try { localStorage.setItem("qps_data", JSON.stringify(v)); } catch (e) {} }
+      if (v) {
+        // Firebase는 빈 객체를 null로 저장하므로 _pick 복원
+        ZONES.forEach(z => { if (v[z] && !v[z]._pick) v[z]._pick = {}; });
+        setData(v);
+        try { localStorage.setItem("qps_data", JSON.stringify(v)); } catch (e) {}
+      }
     });
     const u2 = onValue(ref(fdb, "qps/round"), snap => {
       if (resettingRef.current) return;
@@ -336,12 +341,13 @@ export default function App() {
         const subCount = subs ? subs.length : 1;
         mLines.forEach(l => {
           if (subs) {
+            let lFlow = 0, lShelf = 0;
             subs.forEach(sub => {
-              mFlowDone += (((data[z][l]||{})[sub]||{})["플로우"]||[]).filter(v=>v).length;
-              mShelfDone += (((data[z][l]||{})[sub]||{})["선반"]||[]).filter(v=>v).length;
+              lFlow += (((data[z][l]||{})[sub]||{})["플로우"]||[]).filter(v=>v).length;
+              lShelf += (((data[z][l]||{})[sub]||{})["선반"]||[]).filter(v=>v).length;
             });
-            mFlowDone = Math.round(mFlowDone / subCount);
-            mShelfDone = Math.round(mShelfDone / subCount);
+            mFlowDone += Math.round(lFlow / subCount);
+            mShelfDone += Math.round(lShelf / subCount);
           } else {
             mFlowDone += ((data[z][l]||{})["플로우"]||[]).filter(v=>v).length;
             mShelfDone += ((data[z][l]||{})["선반"]||[]).filter(v=>v).length;
