@@ -18,10 +18,10 @@ let fdb = null;
 try { fdb = getDatabase(initializeApp(firebaseConfig)); } catch (e) {}
 const dbSet = (p, val) => { try { if (fdb) set(ref(fdb, p), val); } catch (e) {} };
 
-const ZONES = ["상부", "하부", "B", "C", "D", "P", "T", "W", "Z"];
+const ZONES = ["상부", "하부", "B", "C", "D", "P/Z", "T", "W", "V"];
 const ZONE_COLORS = {
   "상부": "#7c3aed", "하부": "#2563eb", "B": "#ea580c", "C": "#0891b2",
-  "D": "#dc2626", "P": "#059669", "T": "#db2777", "W": "#65a30d", "Z": "#d97706",
+  "D": "#dc2626", "P/Z": "#059669", "T": "#db2777", "W": "#65a30d", "V": "#6366f1",
 };
 const LINES = [1, 2, 3, 4];
 const NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -33,7 +33,7 @@ const LINE_ORDER = {
   "선반":   [2, 4, 3, 1],  // 2→4→3→1
 };
 
-// 라인 내 서브존: data[zone][line][subzone][type]
+// 라인 내 서브존: ((data[zone]||{})[line]||{})[subzone][type]
 const SUB_ZONES = {
   "상부": ["BB", "BC", "BD"],
   "하부": ["AA", "AB", "AC", "AD"],
@@ -50,9 +50,36 @@ try {
   document.head.appendChild(fontLink);
 } catch (e) {}
 
-// 데이터 초기화: data[zone][line] = { [type]: [] } 또는 data[zone][line][sub][type]
+// 데이터 초기화: data[zone][line] = { [type]: [] } 또는 ((data[zone]||{})[line]||{})[sub][type]
 const initData = () => {
-  try { const s = localStorage.getItem("qps_data"); if (s) return JSON.parse(s); } catch (e) {}
+  try {
+    const s = localStorage.getItem("qps_data");
+    if (s) {
+      const d = JSON.parse(s);
+      // 마이그레이션: P, Z → P/Z, V 추가
+      if (d["P"] && !d["P/Z"]) {
+        d["P/Z"] = d["P"];
+        delete d["P"];
+      }
+      if (d["Z"] && !d["V"]) {
+        d["V"] = d["Z"];
+        delete d["Z"];
+      }
+      // 누락된 존 추가
+      ZONES.forEach(z => {
+        if (!d[z]) {
+          d[z] = { _pick: {} };
+          const subs = SUB_ZONES[z];
+          LINES.forEach(l => {
+            if (subs) { d[z][l] = {}; subs.forEach(sub => { d[z][l][sub] = {}; TYPES.forEach(t => { d[z][l][sub][t] = Array(9).fill(false); }); }); }
+            else { d[z][l] = {}; TYPES.forEach(t => { d[z][l][t] = Array(9).fill(false); }); }
+          });
+        }
+        if (!d[z]._pick) d[z]._pick = {};
+      });
+      return d;
+    }
+  } catch (e) {}
   const d = {};
   ZONES.forEach(z => {
     d[z] = { _pick: {} };
@@ -297,23 +324,23 @@ export default function App() {
   const stats = useMemo(() => {
     const out = {};
     ZONES.forEach(z => {
+      const zd = data[z] || {};
       const subs = SUB_ZONES[z];
       const total = LINES.length * 9;
       let flowDone = 0, shelfDone = 0;
       LINES.forEach(l => {
         if (subs) {
-          // 서브존별 체크 수 합산 후 서브존 수로 나눠 1라인분으로 환산
           let lFlow = 0, lShelf = 0;
           subs.forEach(sub => {
-            const ld = (data[z][l] || {})[sub] || {};
+            const ld = ((zd[l] || {})[sub]) || {};
             lFlow += (ld["플로우"] || []).filter(v=>v).length;
             lShelf += (ld["선반"] || []).filter(v=>v).length;
           });
           flowDone += Math.round(lFlow / subs.length);
           shelfDone += Math.round(lShelf / subs.length);
         } else {
-          flowDone += ((data[z][l] || {})["플로우"] || []).filter(v=>v).length;
-          shelfDone += ((data[z][l] || {})["선반"] || []).filter(v=>v).length;
+          flowDone += ((zd[l] || {})["플로우"] || []).filter(v=>v).length;
+          shelfDone += ((zd[l] || {})["선반"] || []).filter(v=>v).length;
         }
       });
       out[z] = {
@@ -343,14 +370,14 @@ export default function App() {
           if (subs) {
             let lFlow = 0, lShelf = 0;
             subs.forEach(sub => {
-              lFlow += (((data[z][l]||{})[sub]||{})["플로우"]||[]).filter(v=>v).length;
-              lShelf += (((data[z][l]||{})[sub]||{})["선반"]||[]).filter(v=>v).length;
+              lFlow += (((((data[z]||{})[l]||{})||{})[sub]||{})["플로우"]||[]).filter(v=>v).length;
+              lShelf += (((((data[z]||{})[l]||{})||{})[sub]||{})["선반"]||[]).filter(v=>v).length;
             });
             mFlowDone += Math.round(lFlow / subCount);
             mShelfDone += Math.round(lShelf / subCount);
           } else {
-            mFlowDone += ((data[z][l]||{})["플로우"]||[]).filter(v=>v).length;
-            mShelfDone += ((data[z][l]||{})["선반"]||[]).filter(v=>v).length;
+            mFlowDone += ((((data[z]||{})[l]||{})||{})["플로우"]||[]).filter(v=>v).length;
+            mShelfDone += ((((data[z]||{})[l]||{})||{})["선반"]||[]).filter(v=>v).length;
           }
         });
       });
@@ -399,7 +426,7 @@ export default function App() {
         if (subs) {
           // 서브존 중 가장 많이 진행된 서브존 기준
           subs.forEach(sub => {
-            const arr = (((data[z][l]||{})[sub]||{})[type]||[]);
+            const arr = (((((data[z]||{})[l]||{})||{})[sub]||{})[type]||[]);
             const cnt = arr.filter(v=>v).length;
             if (cnt > 0) {
               const seq = li * 100 + cnt; // 라인 순서 × 100 + 체크 수
@@ -410,7 +437,7 @@ export default function App() {
             }
           });
         } else {
-          const cnt = ((data[z][l]||{})[type]||[]).filter(v=>v).length;
+          const cnt = ((((data[z]||{})[l]||{})||{})[type]||[]).filter(v=>v).length;
           if (cnt > 0) {
             const seq = li * 100 + cnt;
             if (seq > maxSeq) {
@@ -433,18 +460,18 @@ export default function App() {
         LINES.forEach(l => {
           if (subs) {
             subs.forEach(sub => {
-              flowDone += (((data[z][l] || {})[sub] || {})["플로우"] || []).filter(v=>v).length;
-              shelfDone += (((data[z][l] || {})[sub] || {})["선반"] || []).filter(v=>v).length;
+              flowDone += (((((data[z]||{})[l]||{}) || {})[sub] || {})["플로우"] || []).filter(v=>v).length;
+              shelfDone += (((((data[z]||{})[l]||{}) || {})[sub] || {})["선반"] || []).filter(v=>v).length;
             });
           } else {
-            flowDone += ((data[z][l] || {})["플로우"] || []).filter(v=>v).length;
-            shelfDone += ((data[z][l] || {})["선반"] || []).filter(v=>v).length;
+            flowDone += ((((data[z]||{})[l]||{}) || {})["플로우"] || []).filter(v=>v).length;
+            shelfDone += ((((data[z]||{})[l]||{}) || {})["선반"] || []).filter(v=>v).length;
           }
         });
         if (subs) { flowDone = Math.round(flowDone / subCount); shelfDone = Math.round(shelfDone / subCount); }
       });
-      const flowPick = zones.every(z => (data[z]._pick || {})["플로우"]);
-      const shelfPick = zones.every(z => (data[z]._pick || {})["선반"]);
+      const flowPick = zones.every(z => ((data[z]||{})._pick || {})["플로우"]);
+      const shelfPick = zones.every(z => ((data[z]||{})._pick || {})["선반"]);
       const flowAll = flowDone >= flowTotal;
       const shelfAll = shelfDone >= shelfTotal;
       if (flowPick && shelfPick) return "완료";
@@ -461,7 +488,7 @@ export default function App() {
 
     const zoneTypeDone = (z, type) => {
       const subs = SUB_ZONES[z];
-      return LINES.every(l => subs ? subs.every(sub => (((data[z][l]||{})[sub]||{})[type]||[]).every(v=>v)) : ((data[z][l]||{})[type]||[]).every(v=>v));
+      return LINES.every(l => subs ? subs.every(sub => (((((data[z]||{})[l]||{})||{})[sub]||{})[type]||[]).every(v=>v)) : ((((data[z]||{})[l]||{})||{})[type]||[]).every(v=>v));
     };
     const allFlow = ZONES.every(z => zoneTypeDone(z, "플로우"));
     const allShelf = ZONES.every(z => zoneTypeDone(z, "선반"));
@@ -503,7 +530,7 @@ export default function App() {
   const S = { bg:"#f0f4f8",card:"#ffffff",border:"#e2e8f0",text:"#0f172a",textSub:"#64748b",inputBg:"#f8fafc",shadow:"0 1px 8px rgba(0,0,0,0.08)",shadowMd:"0 2px 16px rgba(0,0,0,0.10)" };
   const activeColor = ZONE_COLORS[activeZone];
   const subs = SUB_ZONES[activeZone];
-  const getChecks = (z, l, type, sub) => sub ? (((data[z][l]||{})[sub]||{})[type]||Array(9).fill(false)) : ((data[z][l]||{})[type]||Array(9).fill(false));
+  const getChecks = (z, l, type, sub) => sub ? (((((data[z]||{})[l]||{})||{})[sub]||{})[type]||Array(9).fill(false)) : ((((data[z]||{})[l]||{})||{})[type]||Array(9).fill(false));
 
   return (
     <div style={{ minHeight:"100vh", background:S.bg, color:S.text, fontFamily:"'Pretendard','Apple SD Gothic Neo','Noto Sans KR',sans-serif", padding:"20px 16px" }}>
@@ -593,7 +620,7 @@ export default function App() {
                 const lineShelfDone = subs
                   ? subs.every(sub => (((data[activeZone][l]||{})[sub]||{})["선반"]||[]).every(v=>v))
                   : ((data[activeZone][l]||{})["선반"]||[]).every(v=>v);
-                const isPicked = (data[activeZone]._pick||{})[`line_${l}`] || false;
+                const isPicked = ((data[activeZone]||{})._pick||{})[`line_${l}`] || false;
                 const bg = isPicked ? "#dcfce7" : (lineFlowDone && lineShelfDone) ? "#fef9c3" : activeLine===l ? activeColor : S.inputBg;
                 const color = isPicked ? "#15803d" : (lineFlowDone && lineShelfDone) ? "#a16207" : activeLine===l ? "#fff" : S.textSub;
                 return (
@@ -607,11 +634,10 @@ export default function App() {
           <div style={{ display:"flex", gap:8 }}>
             {TYPES.map(type => {
               const pickKey = `line_${activeLine}_${type}`;
-              const isPicked = (data[activeZone]._pick||{})[pickKey] || false;
+              const isPicked = ((data[activeZone]||{})._pick||{})[pickKey] || false;
               const allDone = subs
-                ? subs.every(sub => (((data[activeZone][activeLine]||{})[sub]||{})[type]||[]).every(v=>v))
-                : ((data[activeZone][activeLine]||{})[type]||[]).every(v=>v);
-              const LINE_ORDER = { "플로우": [1, 2, 3, 4], "선반": [2, 4, 3, 1] };
+                ? subs.every(sub => (((((data[activeZone]||{})[activeLine]||{})||{})[sub]||{})[type]||[]).every(v=>v))
+                : ((((data[activeZone]||{})[activeLine]||{})||{})[type]||[]).every(v=>v);
               const lineIdx = LINE_ORDER[type].indexOf(activeLine);
               return (
                 <button key={type} onClick={() => {
