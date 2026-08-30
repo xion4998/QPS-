@@ -172,6 +172,8 @@ export default function App() {
     dbSet("qps/data", d);
   };
 
+  const resettingRef = useRef(false);
+
   useEffect(() => {
     if (!fdb) return;
     const u1 = onValue(ref(fdb, "qps/data"), snap => {
@@ -223,7 +225,19 @@ export default function App() {
       newZone[line] = { ...newZone[line], [type]: newArr };
     }
     const pickKey = `line_${line}_${type}`;
-    if (!newArr.every(v => v)) {
+    // 해당 라인 전체 완료 시 피킹완료 자동 처리
+    const lineAllDone = sub
+      ? (SUB_ZONES[zone] || []).every(s => {
+          const arr = s === sub ? newArr : ((newZone[line][s] || {})[type] || []);
+          return arr.every(v => v);
+        })
+      : newArr.every(v => v);
+
+    if (lineAllDone && !allChecked) {
+      // 마지막 번호 체크 → 자동 피킹완료
+      newZone._pick = { ...(newZone._pick || {}), [pickKey]: true };
+    } else if (!newArr.every(v => v)) {
+      // 해제 → 피킹완료 취소
       newZone._pick = { ...(newZone._pick || {}), [pickKey]: false };
     }
     saveData({ ...data, [zone]: newZone });
@@ -286,8 +300,6 @@ export default function App() {
     }
     saveData({ ...data, [zone]: newZone });
   };
-
-  const resettingRef = useRef(false);
 
   const resetAll = () => {
     if (!resetConfirm) { setResetConfirm(true); setTimeout(() => setResetConfirm(false), 3000); return; }
@@ -398,7 +410,7 @@ export default function App() {
 
   useEffect(() => {
     dbSet("summary/qps", { pct: grand.pct, round, ts: Date.now() });
-  }, [grand.pct, round]);
+  }, [grand.flowPct, grand.shelfPct, round]);
 
   const getSummaryText = () => {
     const now = new Date();
@@ -412,9 +424,9 @@ export default function App() {
       { name: "하부", zones: ["하부"] },
       { name: "B존", zones: ["B"] },
       { name: "D존", zones: ["D"] },
-      { name: "P존", zones: ["P"] },
+      { name: "P/Z존", zones: ["P/Z"] },
       { name: "W존", zones: ["W"] },
-      { name: "Z존", zones: ["Z"] },
+      { name: "V존", zones: ["V"] },
       { name: "C/T", zones: ["C", "T"] },
     ];
 
