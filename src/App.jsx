@@ -172,12 +172,11 @@ export default function App() {
     dbSet("qps/data", d);
   };
 
-  const [loading, setLoading] = useState(true);
 
   const resettingRef = useRef(false);
 
   useEffect(() => {
-    if (!fdb) { setLoading(false); return; }
+    if (!fdb) return;
     const u1 = onValue(ref(fdb, "qps/data"), snap => {
       if (resettingRef.current) return;
       const v = snap.val();
@@ -186,15 +185,13 @@ export default function App() {
         setData(v);
         try { localStorage.setItem("qps_data", JSON.stringify(v)); } catch (e) {}
       }
-      setLoading(false);
     });
     const u2 = onValue(ref(fdb, "qps/round"), snap => {
       if (resettingRef.current) return;
       const v = snap.val(); if (v) setRound(v);
     });
     // 3초 후에도 안 오면 localStorage로 폴백
-    const timeout = setTimeout(() => setLoading(false), 3000);
-    return () => { u1(); u2(); clearTimeout(timeout); };
+    return () => { u1(); u2(); };
   }, []);
 
   const selectZone = (z) => {
@@ -545,19 +542,6 @@ export default function App() {
   const activeColor = ZONE_COLORS[activeZone];
   const subs = SUB_ZONES[activeZone];
   const getChecks = (z, l, type, sub) => sub ? (((((data[z]||{})[l]||{})||{})[sub]||{})[type]||Array(9).fill(false)) : ((((data[z]||{})[l]||{})||{})[type]||Array(9).fill(false));
-
-  if (loading) {
-    return (
-      <div style={{ minHeight:"100vh", background:"#f0f4f8", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Pretendard','Apple SD Gothic Neo',sans-serif", fontSize:16, color:"#64748b" }}>
-        불러오는 중...
-      </div>
-    );
-  } }`}</style>
-        <div style={{ marginTop:16, fontSize:13, color:"#64748b" }}>데이터 불러오는 중...</div>
-      </div>
-    );
-  }
-
   return (
     <div style={{ minHeight:"100vh", background:S.bg, color:S.text, fontFamily:"'Pretendard','Apple SD Gothic Neo','Noto Sans KR',sans-serif", padding:"20px 16px" }}>
 
