@@ -165,32 +165,41 @@ export default function App() {
     setZoneResetConfirm(null);
   };
 
-  const saveData = (d) => {
+  const saveData = (d, path, val) => {
     if (!editable) return;
     setData(d);
     try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
-    dbSet("qps/data", d);
+    // 변경된 경로만 업데이트 (충돌 방지)
+    if (path && val !== undefined) {
+      dbSet(`qps/data/${path}`, val);
+    } else {
+      dbSet("qps/data", d);
+    }
   };
+
+  const [loading, setLoading] = useState(true);
 
   const resettingRef = useRef(false);
 
   useEffect(() => {
-    if (!fdb) return;
+    if (!fdb) { setLoading(false); return; }
     const u1 = onValue(ref(fdb, "qps/data"), snap => {
       if (resettingRef.current) return;
       const v = snap.val();
       if (v) {
-        // Firebase는 빈 객체를 null로 저장하므로 _pick 복원
         ZONES.forEach(z => { if (v[z] && !v[z]._pick) v[z]._pick = {}; });
         setData(v);
         try { localStorage.setItem("qps_data", JSON.stringify(v)); } catch (e) {}
       }
+      setLoading(false);
     });
     const u2 = onValue(ref(fdb, "qps/round"), snap => {
       if (resettingRef.current) return;
       const v = snap.val(); if (v) setRound(v);
     });
-    return () => { u1(); u2(); };
+    // 3초 후에도 안 오면 localStorage로 폴백
+    const timeout = setTimeout(() => setLoading(false), 3000);
+    return () => { u1(); u2(); clearTimeout(timeout); };
   }, []);
 
   const selectZone = (z) => {
@@ -225,7 +234,6 @@ export default function App() {
       newZone[line] = { ...newZone[line], [type]: newArr };
     }
     const pickKey = `line_${line}_${type}`;
-    // 해당 라인 전체 완료 시 피킹완료 자동 처리
     const lineAllDone = sub
       ? (SUB_ZONES[zone] || []).every(s => {
           const arr = s === sub ? newArr : ((newZone[line][s] || {})[type] || []);
@@ -234,13 +242,14 @@ export default function App() {
       : newArr.every(v => v);
 
     if (lineAllDone && !allChecked) {
-      // 마지막 번호 체크 → 자동 피킹완료
       newZone._pick = { ...(newZone._pick || {}), [pickKey]: true };
     } else if (!newArr.every(v => v)) {
-      // 해제 → 피킹완료 취소
       newZone._pick = { ...(newZone._pick || {}), [pickKey]: false };
     }
-    saveData({ ...data, [zone]: newZone });
+
+    const newData = { ...data, [zone]: newZone };
+    const fbPath = sub ? `${zone}/${line}/${sub}/${type}` : `${zone}/${line}/${type}`;
+    saveData(newData, fbPath, sub ? newZone[line][sub][type] : newZone[line][type]);
   };
 
   // 라인완료 토글
@@ -543,6 +552,17 @@ export default function App() {
   const activeColor = ZONE_COLORS[activeZone];
   const subs = SUB_ZONES[activeZone];
   const getChecks = (z, l, type, sub) => sub ? (((((data[z]||{})[l]||{})||{})[sub]||{})[type]||Array(9).fill(false)) : ((((data[z]||{})[l]||{})||{})[type]||Array(9).fill(false));
+
+  if (loading) {
+    return (
+      <div style={{ minHeight:"100vh", background:"#f0f4f8", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", fontFamily:"'Pretendard','Apple SD Gothic Neo',sans-serif" }}>
+        <div style={{ fontSize:28, fontWeight:900, background:"linear-gradient(135deg,#059669,#0891b2)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", marginBottom:16 }}>QPS</div>
+        <div style={{ width:40, height:40, border:"4px solid #e2e8f0", borderTop:"4px solid #059669", borderRadius:"50%", animation:"spin 0.8s linear infinite" }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        <div style={{ marginTop:16, fontSize:13, color:"#64748b" }}>데이터 불러오는 중...</div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ minHeight:"100vh", background:S.bg, color:S.text, fontFamily:"'Pretendard','Apple SD Gothic Neo','Noto Sans KR',sans-serif", padding:"20px 16px" }}>
