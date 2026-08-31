@@ -165,16 +165,11 @@ export default function App() {
     setZoneResetConfirm(null);
   };
 
-  const saveData = (d, path, val) => {
+  const saveData = (d) => {
     if (!editable) return;
     setData(d);
     try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
-    // 변경된 경로만 업데이트 (충돌 방지)
-    if (path && val !== undefined) {
-      dbSet(`qps/data/${path}`, val);
-    } else {
-      dbSet("qps/data", d);
-    }
+    dbSet("qps/data", d);
   };
 
   const [loading, setLoading] = useState(true);
@@ -247,9 +242,7 @@ export default function App() {
       newZone._pick = { ...(newZone._pick || {}), [pickKey]: false };
     }
 
-    const newData = { ...data, [zone]: newZone };
-    const fbPath = sub ? `${zone}/${line}/${sub}/${type}` : `${zone}/${line}/${type}`;
-    saveData(newData, fbPath, sub ? newZone[line][sub][type] : newZone[line][type]);
+    saveData({ ...data, [zone]: newZone });
   };
 
   // 라인완료 토글
