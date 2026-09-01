@@ -192,9 +192,12 @@ export default function App() {
       if (resettingRef.current) return;
       const v = snap.val();
       if (v) {
-        ZONES.forEach(z => { if (v[z] && !v[z]._pick) v[z]._pick = { _init: true }; });
-        setData(v);
-        try { localStorage.setItem("qps_data", JSON.stringify(v)); } catch (e) {}
+        // Firebase 키 P_Z → P/Z 변환
+        const converted = {};
+        Object.keys(v).forEach(k => { converted[k.replace(/_/g, "/")] = v[k]; });
+        ZONES.forEach(z => { if (converted[z] && !converted[z]._pick) converted[z]._pick = { _init: true }; });
+        setData(converted);
+        try { localStorage.setItem("qps_data", JSON.stringify(converted)); } catch (e) {}
       }
     });
     const u2 = onValue(ref(fdb, "qps/round"), snap => {
