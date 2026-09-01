@@ -418,10 +418,11 @@ export default function App() {
     };
   }, [stats, data]);
 
-  // data 변경 시 Firebase 자동 동기화 - 존별로 쪼개서 올림
+  // data 변경 시 Firebase 자동 동기화 - 존별로 쪼개서 올림 (P/Z → P_Z)
   useEffect(() => {
     ZONES.forEach(z => {
-      if (data[z]) dbSet(`qps/data/${z}`, data[z]);
+      const fbKey = z.replace(/\//g, "_");
+      if (data[z]) dbSet(`qps/data/${fbKey}`, data[z]);
     });
   }, [data]);
 
