@@ -60,7 +60,7 @@ try {
   document.head.appendChild(fontLink);
 } catch (e) {}
 
-// 데이터 초기화: data[zone][line] = { [type]: [] } 또는 ((data[zone]||{})[line]||{})[sub][type]
+// 데이터 초기화: (data[zone]||{})[line] = { [type]: [] } 또는 ((data[zone]||{})[line]||{})[sub][type]
 const initData = () => {
   try {
     const s = localStorage.getItem("qps_data");
@@ -643,12 +643,13 @@ export default function App() {
             <div style={{ fontSize:14, fontWeight:700, color:activeColor }}>{activeZone} 존</div>
             <div style={{ display:"flex", gap:6 }}>
               {LINES.map(l => {
+                const zoneData = data[activeZone] || {};
                 const lineFlowDone = subs
-                  ? subs.every(sub => (((data[activeZone][l]||{})[sub]||{})["플로우"]||[]).every(v=>v))
-                  : ((data[activeZone][l]||{})["플로우"]||[]).every(v=>v);
+                  ? subs.every(sub => (((zoneData[l]||{})[sub]||{})["플로우"]||[]).every(v=>v))
+                  : ((zoneData[l]||{})["플로우"]||[]).every(v=>v);
                 const lineShelfDone = subs
-                  ? subs.every(sub => (((data[activeZone][l]||{})[sub]||{})["선반"]||[]).every(v=>v))
-                  : ((data[activeZone][l]||{})["선반"]||[]).every(v=>v);
+                  ? subs.every(sub => (((zoneData[l]||{})[sub]||{})["선반"]||[]).every(v=>v))
+                  : ((zoneData[l]||{})["선반"]||[]).every(v=>v);
                 const isPicked = ((data[activeZone]||{})._pick||{})[`line_${l}`] || false;
                 const bg = isPicked ? "#dcfce7" : (lineFlowDone && lineShelfDone) ? "#fef9c3" : activeLine===l ? activeColor : S.inputBg;
                 const color = isPicked ? "#15803d" : (lineFlowDone && lineShelfDone) ? "#a16207" : activeLine===l ? "#fff" : S.textSub;
