@@ -411,6 +411,17 @@ export default function App() {
     };
   }, [stats, data]);
 
+  // data 변경 시 Firebase 자동 동기화
+  const prevDataRef = useRef(null);
+  useEffect(() => {
+    if (prevDataRef.current === null) { prevDataRef.current = data; return; }
+    if (prevDataRef.current === data) return;
+    prevDataRef.current = data;
+    const isEditable = editable || (typeof localStorage !== 'undefined' && localStorage.getItem("qps_editable") === "true");
+    if (!isEditable) return;
+    dbSet("qps/data", data);
+  }, [data]);
+
   useEffect(() => {
     dbSet("summary/qps", { pct: grand.pct, round, ts: Date.now() });
   }, [grand.flowPct, grand.shelfPct, round]);
