@@ -82,7 +82,7 @@ const initData = () => {
   } catch (e) {}
   const d = {};
   ZONES.forEach(z => {
-    d[z] = { _pick: {} };
+    d[z] = { _pick: { _init: true } }; // 빈 객체 방지
     const subs = SUB_ZONES[z];
     LINES.forEach(l => {
       if (subs) {
@@ -169,10 +169,11 @@ export default function App() {
   useEffect(() => { editableRef.current = editable; }, [editable]);
 
   const saveData = (d) => {
+    const isEditable = editable || (typeof localStorage !== 'undefined' && localStorage.getItem("qps_editable") === "true");
+    if (!isEditable) return;
     setData(d);
     try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
     dbSet("qps/data", d);
-    dbSet("qps/last_save", Date.now());
   };
 
 
@@ -184,7 +185,7 @@ export default function App() {
       if (resettingRef.current) return;
       const v = snap.val();
       if (v) {
-        ZONES.forEach(z => { if (v[z] && !v[z]._pick) v[z]._pick = {}; });
+        ZONES.forEach(z => { if (v[z] && !v[z]._pick) v[z]._pick = { _init: true }; });
         setData(v);
         try { localStorage.setItem("qps_data", JSON.stringify(v)); } catch (e) {}
       }
