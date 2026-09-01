@@ -418,9 +418,11 @@ export default function App() {
     };
   }, [stats, data]);
 
-  // data 변경 시 Firebase 자동 동기화
+  // data 변경 시 Firebase 자동 동기화 - 존별로 쪼개서 올림
   useEffect(() => {
-    dbSet("qps/data", data);
+    ZONES.forEach(z => {
+      if (data[z]) dbSet(`qps/data/${z}`, data[z]);
+    });
   }, [data]);
 
   useEffect(() => {
