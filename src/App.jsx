@@ -16,7 +16,17 @@ const firebaseConfig = {
 const EDIT_PASSWORD = "001";
 let fdb = null;
 try { fdb = getDatabase(initializeApp(firebaseConfig)); } catch (e) {}
-const dbSet = (p, val) => { try { if (fdb) set(ref(fdb, p), val); } catch (e) {} };
+const dbSet = (p, val) => { 
+  try { 
+    if (fdb) {
+      set(ref(fdb, p), val)
+        .then(() => console.log("Firebase write OK:", p))
+        .catch(e => console.error("Firebase write FAIL:", p, e));
+    } else {
+      console.error("fdb is null!");
+    }
+  } catch (e) { console.error("dbSet error:", e); } 
+};
 
 const ZONES = ["상부", "하부", "B", "C", "D", "P/Z", "T", "W", "V"];
 const ZONE_COLORS = {
@@ -173,6 +183,8 @@ export default function App() {
     try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
   };
 
+
+  const fromFirebaseRef = useRef(false);
 
   const resettingRef = useRef(false);
 
@@ -408,8 +420,6 @@ export default function App() {
       machineStats,
     };
   }, [stats, data]);
-
-  const fromFirebaseRef = useRef(false);
 
   // data 변경 시 Firebase 자동 동기화 (Firebase에서 온 변경 제외)
   useEffect(() => {
