@@ -170,6 +170,7 @@ export default function App() {
     setData(d);
     try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
     dbSet("qps/data", d);
+    dbSet("qps/data_test", { ts: Date.now() }); // 테스트용
   };
 
 
