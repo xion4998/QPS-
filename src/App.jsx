@@ -184,8 +184,6 @@ export default function App() {
   };
 
 
-  const fromFirebaseRef = useRef(false);
-
   const resettingRef = useRef(false);
 
   useEffect(() => {
@@ -195,7 +193,6 @@ export default function App() {
       const v = snap.val();
       if (v) {
         ZONES.forEach(z => { if (v[z] && !v[z]._pick) v[z]._pick = { _init: true }; });
-        fromFirebaseRef.current = true;
         setData(v);
         try { localStorage.setItem("qps_data", JSON.stringify(v)); } catch (e) {}
       }
@@ -421,9 +418,8 @@ export default function App() {
     };
   }, [stats, data]);
 
-  // data 변경 시 Firebase 자동 동기화 (Firebase에서 온 변경 제외)
+  // data 변경 시 Firebase 자동 동기화
   useEffect(() => {
-    if (fromFirebaseRef.current) { fromFirebaseRef.current = false; return; }
     dbSet("qps/data", data);
   }, [data]);
 
