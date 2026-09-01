@@ -165,11 +165,14 @@ export default function App() {
     setZoneResetConfirm(null);
   };
 
+  const editableRef = useRef(editable);
+  useEffect(() => { editableRef.current = editable; }, [editable]);
+
   const saveData = (d) => {
+    if (!editableRef.current) return;
     setData(d);
     try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
     dbSet("qps/data", d);
-    dbSet("qps/data_test", { ts: Date.now() });
   };
 
 
