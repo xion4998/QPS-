@@ -169,10 +169,12 @@ export default function App() {
   useEffect(() => { editableRef.current = editable; }, [editable]);
 
   const saveData = (d) => {
-    if (!editableRef.current) return;
+    const isEditable = editable || (typeof localStorage !== 'undefined' && localStorage.getItem("qps_editable") === "true");
+    if (!isEditable) return;
     setData(d);
     try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
     dbSet("qps/data", d);
+    dbSet("qps/last_save", Date.now());
   };
 
 
