@@ -171,41 +171,56 @@ export default function App() {
         TYPES.forEach(t => { newZone[l][t] = Array(9).fill(false); });
       }
     });
-    saveData({ ...data, [z]: newZone });
+    saveData({ ...data, [z]: newZone }, z);
     setZoneResetConfirm(null);
   };
 
   const editableRef = useRef(editable);
   useEffect(() => { editableRef.current = editable; }, [editable]);
 
-  const saveData = (d) => {
+  const saveData = (d, changedZone) => {
     setData(d);
     try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
+    // 변경된 존만 Firebase 업데이트 (충돌 방지)
+    if (changedZone && d[changedZone]) {
+      const fbKey = changedZone.replace(/\//g, "_");
+      dbSet(`qps/data/${fbKey}`, d[changedZone]);
+    }
   };
 
 
   const resettingRef = useRef(false);
 
+  const isWritingRef = useRef(false);
+
   useEffect(() => {
     if (!fdb) return;
-    const u1 = onValue(ref(fdb, "qps/data"), snap => {
-      if (resettingRef.current) return;
-      const v = snap.val();
-      if (v) {
-        // Firebase 키 P_Z → P/Z 변환
-        const converted = {};
-        Object.keys(v).forEach(k => { converted[k.replace(/_/g, "/")] = v[k]; });
-        ZONES.forEach(z => { if (converted[z] && !converted[z]._pick) converted[z]._pick = { _init: true }; });
-        setData(converted);
-        try { localStorage.setItem("qps_data", JSON.stringify(converted)); } catch (e) {}
-      }
+    const subs = [];
+    
+    // 존별 개별 구독 (충돌 방지)
+    ZONES.forEach(z => {
+      const fbKey = z.replace(/\//g, "_");
+      subs.push(onValue(ref(fdb, `qps/data/${fbKey}`), snap => {
+        if (resettingRef.current) return;
+        const v = snap.val();
+        if (v) {
+          if (!v._pick) v._pick = { _init: true };
+          isWritingRef.current = true;
+          setData(prev => {
+            const next = { ...prev, [z]: v };
+            try { localStorage.setItem("qps_data", JSON.stringify(next)); } catch (e) {}
+            return next;
+          });
+        }
+      }));
     });
+
     const u2 = onValue(ref(fdb, "qps/round"), snap => {
       if (resettingRef.current) return;
       const v = snap.val(); if (v) setRound(v);
     });
-    // 3초 후에도 안 오면 localStorage로 폴백
-    return () => { u1(); u2(); };
+    subs.push(u2);
+    return () => subs.forEach(u => u());
   }, []);
 
   const selectZone = (z) => {
@@ -253,7 +268,7 @@ export default function App() {
       newZone._pick = { ...(newZone._pick || {}), [pickKey]: false };
     }
 
-    saveData({ ...data, [zone]: newZone });
+    saveData({ ...data, [zone]: newZone }, zone);
   };
 
   // 라인완료 토글
@@ -268,7 +283,7 @@ export default function App() {
     } else {
       newData = { ...data, [zone]: { ...zd, [line]: { ...zd[line], [type]: newArr } } };
     }
-    saveData(newData);
+    saveData(newData, zone);
   };
 
   // 존 전체 완료 (불출완료→피킹완료→해제) - 현재 서브존 기준
@@ -311,7 +326,7 @@ export default function App() {
       });
       newZone._pick = { ...(newZone._pick || {}), [pickKey]: false };
     }
-    saveData({ ...data, [zone]: newZone });
+    saveData({ ...data, [zone]: newZone }, zone);
   };
 
   const resetAll = () => {
@@ -319,7 +334,11 @@ export default function App() {
     try { localStorage.removeItem("qps_data"); localStorage.removeItem("qps_round"); } catch (e) {}
     const d = initData();
     resettingRef.current = true;
-    dbSet("qps/data", d);
+    // 존별로 초기화
+    ZONES.forEach(z => {
+      const fbKey = z.replace(/\//g, "_");
+      dbSet(`qps/data/${fbKey}`, d[z]);
+    });
     dbSet("qps/round", 1);
     setData(d);
     setRound(1);
@@ -421,13 +440,6 @@ export default function App() {
     };
   }, [stats, data]);
 
-  // data 변경 시 Firebase 자동 동기화 - 존별로 쪼개서 올림 (P/Z → P_Z)
-  useEffect(() => {
-    ZONES.forEach(z => {
-      const fbKey = z.replace(/\//g, "_");
-      if (data[z]) dbSet(`qps/data/${fbKey}`, data[z]);
-    });
-  }, [data]);
 
   useEffect(() => {
     dbSet("summary/qps", { pct: grand.pct, round, ts: Date.now() });
@@ -698,7 +710,7 @@ export default function App() {
                     }
                     newZone._pick = { ...(newZone._pick||{}), [pickKey]: false };
                   }
-                  saveData({ ...data, [activeZone]: newZone });
+                  saveData({ ...data, [activeZone]: newZone }, activeZone);
                 }} style={{ flex:1, fontSize:11, fontWeight:800, padding:"8px 0", borderRadius:9, cursor:"pointer", transition:"all 0.15s",
                   background: isPicked?"#dcfce7":allDone?"#fef9c3":"#f8fafc",
                   border:`1.5px solid ${isPicked?"#86efac":allDone?"#fde047":"#e2e8f0"}`,
