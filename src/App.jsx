@@ -28,10 +28,10 @@ const dbSet = (p, val) => {
   } catch (e) { console.error("dbSet error:", e); } 
 };
 
-const ZONES = ["상부", "하부", "B", "C", "D", "P/Z", "T", "W", "V"];
+const ZONES = ["상부", "하부", "B", "D", "P", "Z", "T", "W", "V"];
 const ZONE_COLORS = {
-  "상부": "#7c3aed", "하부": "#2563eb", "B": "#ea580c", "C": "#0891b2",
-  "D": "#dc2626", "P/Z": "#059669", "T": "#db2777", "W": "#65a30d", "V": "#6366f1",
+  "상부": "#7c3aed", "하부": "#2563eb", "B": "#ea580c", "D": "#dc2626",
+  "P": "#059669", "Z": "#d97706", "T": "#db2877", "W": "#65a30d", "V": "#6366f1",
 };
 const LINES = [1, 2, 3, 4];
 const NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -44,6 +44,9 @@ const LINE_ORDER = {
 };
 
 // 라인 내 서브존: ((data[zone]||{})[line]||{})[subzone][type]
+// P존은 증정 완료/미완료만 (번호 체크 없음)
+const GIFT_ZONE = "P";
+
 const SUB_ZONES = {
   "상부": ["BB", "BC", "BD"],
   "하부": ["AA", "AB", "AC", "AD"],
@@ -67,14 +70,14 @@ const initData = () => {
     if (s) {
       const d = JSON.parse(s);
       // 마이그레이션: P, Z → P/Z, V 추가
-      if (d["P"] && !d["P/Z"]) {
-        d["P/Z"] = d["P"];
-        delete d["P"];
+      // P/Z 합쳐진 데이터 → 다시 분리
+      if (d["P/Z"] && !d["P"]) {
+        d["P"] = { _pick: { _init: true }, giftPicking: d["P/Z"].giftPicking || false };
+        d["Z"] = d["P/Z"];
+        delete d["P/Z"];
       }
-      if (d["Z"] && !d["V"]) {
-        d["V"] = d["Z"];
-        delete d["Z"];
-      }
+      // C존 데이터 제거
+      delete d["C"];
       // 누락된 존 추가
       ZONES.forEach(z => {
         if (!d[z]) {
@@ -92,7 +95,12 @@ const initData = () => {
   } catch (e) {}
   const d = {};
   ZONES.forEach(z => {
-    d[z] = { _pick: { _init: true } }; // 빈 객체 방지
+    if (z === GIFT_ZONE) {
+      // P존: 증정 완료/미완료만
+      d[z] = { _pick: { _init: true }, giftPicking: false };
+      return;
+    }
+    d[z] = { _pick: { _init: true } };
     const subs = SUB_ZONES[z];
     LINES.forEach(l => {
       if (subs) {
@@ -183,8 +191,8 @@ export default function App() {
     try { localStorage.setItem("qps_data", JSON.stringify(d)); } catch (e) {}
     // 변경된 존만 Firebase 업데이트 (충돌 방지)
     if (changedZone && d[changedZone]) {
-      const fbKey = changedZone.replace(/\//g, "_");
-      dbSet(`qps/data/${fbKey}`, d[changedZone]);
+      const fbKey = changedZone.split("/").join("_");
+      dbSet("qps/data/" + fbKey, d[changedZone]);
     }
   };
 
@@ -199,8 +207,8 @@ export default function App() {
     
     // 존별 개별 구독 (충돌 방지)
     ZONES.forEach(z => {
-      const fbKey = z.replace(/\//g, "_");
-      subs.push(onValue(ref(fdb, `qps/data/${fbKey}`), snap => {
+      const fbKey = z.split("/").join("_");
+      subs.push(onValue(ref(fdb, "qps/data/" + fbKey), snap => {
         if (resettingRef.current) return;
         const v = snap.val();
         if (v) {
@@ -336,8 +344,8 @@ export default function App() {
     resettingRef.current = true;
     // 존별로 초기화
     ZONES.forEach(z => {
-      const fbKey = z.replace(/\//g, "_");
-      dbSet(`qps/data/${fbKey}`, d[z]);
+      const fbKey = z.split("/").join("_");
+      dbSet("qps/data/" + fbKey, d[z]);
     });
     dbSet("qps/round", 1);
     setData(d);
@@ -368,6 +376,12 @@ export default function App() {
   const stats = useMemo(() => {
     const out = {};
     ZONES.forEach(z => {
+      // P존(증정존) - 완료/미완료만
+      if (z === GIFT_ZONE) {
+        const giftDone = (data[z] || {}).giftPicking === true;
+        out[z] = { flowDone: giftDone ? 1 : 0, shelfDone: giftDone ? 1 : 0, total: 1, flowPct: giftDone ? 100 : 0, shelfPct: giftDone ? 100 : 0, pct: giftDone ? 100 : 0 };
+        return;
+      }
       const zd = data[z] || {};
       const subs = SUB_ZONES[z];
       const total = LINES.length * 9;
@@ -457,10 +471,11 @@ export default function App() {
       { name: "하부", zones: ["하부"] },
       { name: "B존", zones: ["B"] },
       { name: "D존", zones: ["D"] },
-      { name: "P/Z존", zones: ["P/Z"] },
+      { name: "P존(증정)", zones: ["P"] },
+      { name: "Z존", zones: ["Z"] },
       { name: "W존", zones: ["W"] },
       { name: "V존", zones: ["V"] },
-      { name: "C/T", zones: ["C", "T"] },
+      { name: "T존", zones: ["T"] },
     ];
 
     const getLastNum = (z, type) => {
@@ -652,6 +667,35 @@ export default function App() {
 
       {/* 체크 패널 */}
       <div style={{ background:S.card, border:`1.5px solid ${activeColor}`, borderRadius:16, padding:16, marginBottom:16, boxShadow:S.shadowMd }}>
+
+        {/* P존 - 증정 완료/미완료만 */}
+        {activeZone === GIFT_ZONE ? (
+          <div>
+            <div style={{ fontSize:14, fontWeight:700, color:activeColor, marginBottom:14 }}>P존 · 증정 피킹</div>
+            <div style={{ display:"flex", gap:10 }}>
+              {[true, false].map(done => {
+                const giftDone = (data["P"] || {}).giftPicking === true;
+                const isActive = done ? giftDone : !giftDone;
+                return (
+                  <button key={String(done)} onClick={() => {
+                    if (!editable) return;
+                    const newZone = { ...(data["P"] || {}), giftPicking: done };
+                    saveData({ ...data, "P": newZone }, "P");
+                  }} style={{
+                    flex:1, padding:"18px 0", borderRadius:12, cursor:"pointer", fontFamily:"inherit",
+                    fontSize:15, fontWeight:800,
+                    background: isActive ? (done ? "#dcfce7" : "#fee2e2") : S.inputBg,
+                    border: `2px solid ${isActive ? (done ? "#86efac" : "#fca5a5") : S.border}`,
+                    color: isActive ? (done ? "#15803d" : "#dc2626") : S.textSub,
+                  }}>
+                    {done ? "✅ 증정 완료" : "⬜ 증정 미완료"}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+        <>
         {/* 존 + 라인 선택 + 라인 완료 버튼 */}
         <div style={{ marginBottom:10 }}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
@@ -767,6 +811,8 @@ export default function App() {
             </div>
           );
         })}
+        </> 
+        )}
       </div>
 
       {/* 존별 요약 */}
