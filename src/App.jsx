@@ -412,16 +412,18 @@ export default function App() {
   }, [data]);
 
   const grand = useMemo(() => {
-    const total = ZONES.length * LINES.length * 9;
-    const flowDone = ZONES.reduce((s, z) => s + stats[z].flowDone, 0);
-    const shelfDone = ZONES.reduce((s, z) => s + stats[z].shelfDone, 0);
+    // P존(증정존) 제외하고 퍼센트 계산
+    const calcZones = ZONES.filter(z => z !== GIFT_ZONE);
+    const total = calcZones.length * LINES.length * 9;
+    const flowDone = calcZones.reduce((s, z) => s + stats[z].flowDone, 0);
+    const shelfDone = calcZones.reduce((s, z) => s + stats[z].shelfDone, 0);
 
-    // 호기별 계산
+    // 호기별 계산 (P존 제외)
     const machineStats = {};
     Object.entries(MACHINES).forEach(([m, mLines]) => {
       let mFlowDone = 0, mShelfDone = 0;
-      const mTotal = ZONES.length * mLines.length * 9;
-      ZONES.forEach(z => {
+      const mTotal = calcZones.length * mLines.length * 9;
+      calcZones.forEach(z => {
         const subs = SUB_ZONES[z];
         const subCount = subs ? subs.length : 1;
         mLines.forEach(l => {
@@ -511,6 +513,11 @@ export default function App() {
     };
 
     const getGroupStatus = (zones) => {
+      // P존(증정존) 특수 처리
+      if (zones.length === 1 && zones[0] === GIFT_ZONE) {
+        const giftDone = (data[GIFT_ZONE] || {}).giftPicking === true;
+        return giftDone ? "증정완료" : "미시작";
+      }
       let flowDone = 0, shelfDone = 0, flowTotal = 0, shelfTotal = 0;
       zones.forEach(z => {
         const subs = SUB_ZONES[z];
@@ -574,7 +581,7 @@ export default function App() {
         if (!statusGroups[st]) statusGroups[st] = [];
         statusGroups[st].push(g.name);
       });
-      const order = ["완료", "불출완료", "플로우 피킹완료"];
+      const order = ["완료", "증정완료", "불출완료", "플로우 피킹완료"];
       const sorted = Object.entries(statusGroups).sort(([a],[b]) => {
         const ai = order.indexOf(a)>=0?order.indexOf(a):a==="미시작"?999:50;
         const bi = order.indexOf(b)>=0?order.indexOf(b):b==="미시작"?999:50;
@@ -679,7 +686,10 @@ export default function App() {
                 return (
                   <button key={String(done)} onClick={() => {
                     if (!editable) return;
-                    const newZone = { ...(data["P"] || {}), giftPicking: done };
+                    const currentGift = (data["P"] || {}).giftPicking === true;
+                    // 완료 버튼: 현재 완료면 토글(해제), 아니면 완료 / 미완료 버튼: 항상 false
+                    const newGiftPicking = done ? !currentGift : false;
+                    const newZone = { ...(data["P"] || {}), giftPicking: newGiftPicking };
                     saveData({ ...data, "P": newZone }, "P");
                   }} style={{
                     flex:1, padding:"18px 0", borderRadius:12, cursor:"pointer", fontFamily:"inherit",
